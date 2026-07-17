@@ -7,6 +7,7 @@ import { Settings } from "./components/Settings";
 import { SetupWizard } from "./components/SetupWizard";
 import { TitleBar } from "./components/TitleBar";
 import { useSally } from "./store";
+import { applyTransparency, loadTransparency } from "./transparency";
 
 function RecoveryPrompt() {
   const { dict, setPendingRecoveries } = useSally();
@@ -77,6 +78,8 @@ export default function App() {
   useEffect(() => {
     if (booted.current) return;
     booted.current = true;
+
+    applyTransparency(loadTransparency());
 
     const unlisteners: Array<Promise<() => void>> = [
       onStatus((s) => {

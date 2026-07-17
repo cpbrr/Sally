@@ -1,8 +1,14 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
 import { api, AudioDevices } from "../api";
-import { TARGET_LANGUAGES, UiLanguage } from "../i18n";
+import {
+  DEFAULT_CLEANUP_MODEL,
+  DEFAULT_LIVE_MODEL,
+  TARGET_LANGUAGES,
+  UiLanguage,
+} from "../i18n";
 import { useSally } from "../store";
+import { applyTransparency, loadTransparency } from "../transparency";
 
 export function Settings() {
   const { dict, config, setConfig, setUiLanguage, setShowSettings, phase } =
@@ -21,8 +27,8 @@ export function Settings() {
     live_model: config?.live_model ?? "",
     cleanup_model: config?.cleanup_model ?? "",
   });
-  const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
+  const [alpha, setAlpha] = useState(loadTransparency());
 
   useEffect(() => {
     api.listAudioDevices().then(setDevices).catch(() => {});
@@ -35,7 +41,6 @@ export function Settings() {
 
   const save = async () => {
     setError("");
-    setSaved(false);
     try {
       const updated = await api.saveSettings({
         ...form,
@@ -43,10 +48,15 @@ export function Settings() {
       });
       setConfig(updated);
       setUiLanguage(form.ui_language as UiLanguage);
-      setSaved(true);
+      setShowSettings(false);
     } catch (e) {
       setError(String(e));
     }
+  };
+
+  const changeAlpha = (v: number) => {
+    setAlpha(v);
+    applyTransparency(v);
   };
 
   return (
@@ -165,25 +175,57 @@ export function Settings() {
         <p className="field-hint">{dict.readoutHint}</p>
 
         <label>
-          {dict.liveModel}
+          {dict.transparency} ({alpha}%)
           <input
-            type="text"
-            value={form.live_model}
-            onChange={(e) => setForm({ ...form, live_model: e.target.value })}
+            type="range"
+            min={50}
+            max={100}
+            value={alpha}
+            onChange={(e) => changeAlpha(Number(e.target.value))}
           />
         </label>
 
         <label>
+          {dict.liveModel}
+          <div className="row">
+            <input
+              type="text"
+              style={{ flex: 1 }}
+              value={form.live_model}
+              onChange={(e) => setForm({ ...form, live_model: e.target.value })}
+            />
+            <button
+              className="btn compact"
+              title={dict.revertDefault}
+              onClick={() => setForm({ ...form, live_model: DEFAULT_LIVE_MODEL })}
+            >
+              ↺
+            </button>
+          </div>
+        </label>
+
+        <label>
           {dict.cleanupModel}
-          <input
-            type="text"
-            value={form.cleanup_model}
-            onChange={(e) => setForm({ ...form, cleanup_model: e.target.value })}
-          />
+          <div className="row">
+            <input
+              type="text"
+              style={{ flex: 1 }}
+              value={form.cleanup_model}
+              onChange={(e) => setForm({ ...form, cleanup_model: e.target.value })}
+            />
+            <button
+              className="btn compact"
+              title={dict.revertDefault}
+              onClick={() =>
+                setForm({ ...form, cleanup_model: DEFAULT_CLEANUP_MODEL })
+              }
+            >
+              ↺
+            </button>
+          </div>
         </label>
 
         {error && <p className="error-text">{error}</p>}
-        {saved && <p className="ok-text">{dict.saved}</p>}
 
         <div className="row end">
           <button className="btn" onClick={() => setShowSettings(false)}>

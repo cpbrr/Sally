@@ -1,5 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api";
 import { TARGET_LANGUAGES } from "../i18n";
 import { useSally } from "../store";
@@ -17,7 +17,15 @@ const STATUS_KEYS: Record<string, string> = {
 export function TitleBar() {
   const { dict, status, config, phase, setConfig, setShowSettings } =
     useSally();
-  const [pinned, setPinned] = useState(config?.always_on_top ?? true);
+  const [pinned, setPinned] = useState(config?.always_on_top ?? false);
+
+  // Apply the configured default (off unless enabled in Settings) once the
+  // config loads; the pin button overrides it for this window.
+  useEffect(() => {
+    const v = config?.always_on_top ?? false;
+    setPinned(v);
+    getCurrentWindow().setAlwaysOnTop(v);
+  }, [config?.always_on_top]);
 
   const togglePin = async () => {
     const next = !pinned;

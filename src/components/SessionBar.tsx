@@ -21,6 +21,8 @@ export function SessionBar() {
     pausedAccumMs,
     pausedSince,
     config,
+    status,
+    statusDetail,
     setPhase,
     setPaused,
     setReview,
@@ -111,7 +113,18 @@ export function SessionBar() {
           </>
         )}
         <span className="spacer" />
-        {error && <span className="error-text">{error}</span>}
+        {error ? (
+          <span className="error-text">{error}</span>
+        ) : (
+          (status === "reconnecting" || status === "storage-error") &&
+          statusDetail && (
+            <span className="error-text" title={statusDetail}>
+              {statusDetail.length > 60
+                ? statusDetail.slice(0, 60) + "…"
+                : statusDetail}
+            </span>
+          )
+        )}
       </div>
       {confirmEnd && (
         <div className="overlay">

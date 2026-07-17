@@ -91,6 +91,13 @@ const en = {
   save: "Save",
   saved: "Saved",
   errorPrefix: "Error:",
+  transparency: "Window transparency",
+  revertDefault: "Reset to default",
+  reviewClose: "Close review",
+  reviewCloseConfirm: "Close the review?",
+  reviewCloseBody:
+    "The raw transcript is already saved. Speaker names you typed but did not apply will be lost.",
+  keepReviewing: "Keep reviewing",
 };
 
 const vi: typeof en = {
@@ -176,6 +183,13 @@ const vi: typeof en = {
   save: "Lưu",
   saved: "Đã lưu",
   errorPrefix: "Lỗi:",
+  transparency: "Độ trong suốt cửa sổ",
+  revertDefault: "Khôi phục mặc định",
+  reviewClose: "Đóng phần xem lại",
+  reviewCloseConfirm: "Đóng phần xem lại?",
+  reviewCloseBody:
+    "Bản ghi thô đã được lưu. Tên người nói bạn đã nhập nhưng chưa áp dụng sẽ bị mất.",
+  keepReviewing: "Tiếp tục xem lại",
 };
 
 export const dictionaries = { en, vi };
@@ -185,13 +199,9 @@ export const TARGET_LANGUAGES = [
   "Vietnamese",
   "English",
   "Japanese",
-  "Korean",
   "Chinese",
-  "French",
-  "German",
-  "Spanish",
-  "Portuguese",
-  "Thai",
-  "Indonesian",
-  "Hindi",
 ];
+
+// Mirror of the Rust-side defaults (config.rs) for the revert buttons.
+export const DEFAULT_LIVE_MODEL = "gemini-3.5-live-translate-preview";
+export const DEFAULT_CLEANUP_MODEL = "gemini-3.1-flash-lite";

@@ -1,9 +1,11 @@
 /* Sally — calm, compact, dark floating panel (design §6.1). */
 
 :root {
-  --bg: #14161a;
-  --bg-panel: #1b1e24;
-  --bg-raised: #23272f;
+  /* Window transparency slider sets --app-alpha (0.5–1). */
+  --app-alpha: 1;
+  --bg: rgba(20, 22, 26, var(--app-alpha));
+  --bg-panel: rgba(27, 30, 36, var(--app-alpha));
+  --bg-raised: rgba(35, 39, 47, var(--app-alpha));
   --border: #2c313a;
   --text: #e6e9ee;
   --text-dim: #9aa3b0;
@@ -33,8 +35,13 @@ body {
   font-family: var(--font);
   font-size: 13px;
   color: var(--text);
-  background: var(--bg);
+  /* Transparent window: the .app container paints the (translucent) bg. */
+  background: transparent;
   user-select: none;
+}
+
+.app {
+  background: var(--bg);
 }
 
 .app {
@@ -241,13 +248,29 @@ select:focus, input:focus { outline: 1px solid var(--accent); }
 
 /* ---- Overlays: setup, review, settings, dialogs ---- */
 .overlay {
+  /* Leaves the title bar exposed so the window stays draggable and the
+     pin/close controls stay reachable while a sheet is open. */
   position: fixed;
-  inset: 0;
+  top: 32px;
+  left: 0;
+  right: 0;
+  bottom: 0;
   background: rgba(0, 0, 0, 0.55);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 10;
+}
+
+input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.row .btn.compact {
+  padding: 3px 8px;
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 .sheet {
