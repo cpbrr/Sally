@@ -4,6 +4,8 @@ pub mod config;
 pub mod diarization;
 pub mod error;
 pub mod gemini;
+pub mod lang;
+pub mod readout;
 pub mod session;
 pub mod store;
 pub mod timeline;
@@ -46,6 +48,7 @@ pub fn run() {
             commands::start_meeting,
             commands::pause_meeting,
             commands::resume_meeting,
+            commands::set_readout,
             commands::end_meeting,
             commands::apply_review,
             commands::export_without_timestamps,

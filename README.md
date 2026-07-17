@@ -23,6 +23,39 @@ npm run build         # typecheck + bundle the frontend
 cd src-tauri && cargo test   # Rust unit tests
 ```
 
+## Building executables
+
+- **Windows portable exe:** `npx tauri build --no-bundle` →
+  `src-tauri/target/release/sally.exe` (single file; needs only the
+  WebView2 runtime that ships with Windows 11). Zip it with `.env.example`
+  for the portable distribution.
+- **macOS (Apple Silicon):** cannot be cross-compiled from Windows. The
+  GitHub Actions workflow `.github/workflows/release.yml` builds both
+  platforms — Windows ZIP + macOS `.app`/DMG — on every `v*` tag or manual
+  dispatch. macOS signing/notarization (design §12.2) still needs Developer
+  ID secrets.
+
+## Multilingual meetings
+
+One meeting can freely mix languages (e.g. English + Japanese + Vietnamese).
+Gemini Live Translate detects the source language of each passage
+automatically — no per-language configuration — and Sally sends
+`translationConfig.targetLanguageCode` for the selected target.
+`echoTargetLanguage` keeps transcript text even for speech already in the
+target language. Known model limitation: detection can struggle with heavy
+accents and very rapid mid-sentence switches.
+
+## Translated-voice readout
+
+A toggle (🔊 in the title bar, also in Settings, `SALLY_READOUT` in `.env`;
+off by default) speaks the translated voice aloud. Playback is gated per
+passage: speech already in the target language is never read out — with
+target Vietnamese, English and Japanese speech is spoken in Vietnamese while
+Vietnamese speech stays silent. Source language is classified locally from
+the original transcript (exact for Japanese/Korean/Chinese/Thai/Vietnamese
+scripts, coarse for plain-Latin languages). Use headphones: on speakers the
+readout is captured back by loopback and re-enters the pipeline.
+
 ## Platform status
 
 - **Windows 11 x64** — microphone capture and WASAPI loopback system audio

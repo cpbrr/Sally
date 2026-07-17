@@ -15,6 +15,7 @@ export interface RedactedConfig {
   always_on_top: boolean;
   mic_device: string;
   system_device: string;
+  readout_enabled: boolean;
 }
 
 export interface BootInfo {
@@ -34,6 +35,7 @@ export interface SettingsPayload {
   always_on_top?: boolean;
   mic_device?: string;
   system_device?: string;
+  readout_enabled?: boolean;
 }
 
 export interface AudioDevices {
@@ -77,6 +79,8 @@ export const api = {
   startMeeting: (targetLanguage?: string) =>
     invoke<void>("start_meeting", { targetLanguage: targetLanguage ?? null }),
   pauseMeeting: () => invoke<void>("pause_meeting"),
+  setReadout: (enabled: boolean) =>
+    invoke<RedactedConfig>("set_readout", { enabled }),
   resumeMeeting: () => invoke<void>("resume_meeting"),
   endMeeting: () => invoke<ReviewInfo>("end_meeting"),
   applyReview: (renames: Record<string, string>, meetingTitle?: string) =>
