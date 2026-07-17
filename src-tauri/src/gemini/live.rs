@@ -36,15 +36,20 @@ pub struct LiveConnection {
     pub events_rx: mpsc::Receiver<LiveEvent>,
 }
 
-/// Open one Live session. The caller owns retry/backoff.
+/// Open one Live session. The caller owns retry/backoff. `api_version` is
+/// `v1alpha` or `v1beta` — preview models are typically served on v1alpha;
+/// the session orchestrator flips versions automatically when setup is
+/// repeatedly rejected.
 pub async fn connect(
     api_key: &str,
     model: &str,
     target_language: &str,
+    api_version: &str,
 ) -> Result<LiveConnection> {
     let url = format!(
-        "wss://{}/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key={}",
+        "wss://{}/ws/google.ai.generativelanguage.{}.GenerativeService.BidiGenerateContent?key={}",
         super::LIVE_HOST,
+        api_version,
         api_key
     );
     let key = api_key.to_string();
@@ -62,6 +67,11 @@ pub async fn connect(
     // configuration. `echoTargetLanguage: true` keeps transcript text for
     // passages already in the target language; the local readout gate
     // decides separately whether their audio is played.
+    //
+    // No systemInstruction: the live-translate docs define only the fields
+    // below, and translate models reject unknown/unsupported setup fields by
+    // closing the socket — which showed up as rapid live/reconnecting
+    // cycling.
     let target_code = crate::lang::bcp47(target_language);
     let setup = json!({
         "setup": {
@@ -72,18 +82,6 @@ pub async fn connect(
             "translationConfig": {
                 "targetLanguageCode": target_code,
                 "echoTargetLanguage": true
-            },
-            "systemInstruction": {
-                "parts": [{
-                    "text": format!(
-                        "You are a live meeting translator. Speakers may mix several \
-                         languages in one meeting and switch languages mid-sentence. \
-                         Detect the source language of each passage automatically and \
-                         translate everything you hear into {target_language}. If a \
-                         passage is already in {target_language}, transcribe it as-is. \
-                         Translate faithfully without adding commentary."
-                    )
-                }]
             },
             "inputAudioTranscription": {},
             "outputAudioTranscription": {}

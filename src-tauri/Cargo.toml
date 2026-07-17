@@ -1,6 +1,6 @@
 [package]
 name = "sally"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Floating live translation and transcription for meetings"
 license = "MIT"
@@ -13,7 +13,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# macos-private-api: window transparency on macOS (transparency slider).
+tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }

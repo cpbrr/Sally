@@ -21,6 +21,9 @@ const KEY_ALWAYS_ON_TOP: &str = "SALLY_ALWAYS_ON_TOP";
 const KEY_MIC_DEVICE: &str = "SALLY_MIC_DEVICE";
 const KEY_SYSTEM_DEVICE: &str = "SALLY_SYSTEM_DEVICE";
 const KEY_READOUT: &str = "SALLY_READOUT";
+const KEY_LIVE_API_VERSION: &str = "SALLY_LIVE_API_VERSION";
+
+pub const DEFAULT_LIVE_API_VERSION: &str = "v1alpha";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -37,6 +40,9 @@ pub struct AppConfig {
     /// Read translated audio aloud for passages not already in the target
     /// language. Off by default.
     pub readout_enabled: bool,
+    /// Live API version (`v1alpha` or `v1beta`). Preview models usually live
+    /// on v1alpha; the session flips automatically if setup is rejected.
+    pub live_api_version: String,
 }
 
 impl AppConfig {
@@ -49,10 +55,13 @@ impl AppConfig {
             target_language: "Vietnamese".into(),
             ui_language: "en".into(),
             diarization_enabled: true,
-            always_on_top: true,
+            // Off by default: staying pinned above everything during setup
+            // proved annoying. The title-bar pin turns it on per window.
+            always_on_top: false,
             mic_device: String::new(),
             system_device: String::new(),
             readout_enabled: false,
+            live_api_version: DEFAULT_LIVE_API_VERSION.into(),
         }
     }
 
@@ -107,6 +116,10 @@ impl AppConfig {
         cfg.mic_device = get(KEY_MIC_DEVICE);
         cfg.system_device = get(KEY_SYSTEM_DEVICE);
         cfg.readout_enabled = get(KEY_READOUT) == "on";
+        let ver = get(KEY_LIVE_API_VERSION);
+        if !ver.is_empty() {
+            cfg.live_api_version = ver;
+        }
         Ok(cfg)
     }
 
@@ -140,6 +153,7 @@ impl AppConfig {
             KEY_READOUT.into(),
             if self.readout_enabled { "on" } else { "off" }.into(),
         );
+        map.insert(KEY_LIVE_API_VERSION.into(), self.live_api_version.clone());
         let mut out = String::from(
             "# Sally configuration. The API key is stored in plain text by design;\n\
              # anyone who can read this folder can obtain it.\n",
@@ -269,6 +283,8 @@ mod tests {
         assert_eq!(cfg.live_model, DEFAULT_LIVE_MODEL);
         assert_eq!(cfg.cleanup_model, DEFAULT_CLEANUP_MODEL);
         assert!(cfg.diarization_enabled);
-        assert!(cfg.always_on_top);
+        assert!(!cfg.always_on_top, "always-on-top must default off");
+        assert!(!cfg.readout_enabled);
+        assert_eq!(cfg.live_api_version, DEFAULT_LIVE_API_VERSION);
     }
 }

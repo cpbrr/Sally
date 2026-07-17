@@ -111,20 +111,31 @@ pub fn start(app: AppHandle, config: AppConfig) -> Result<SessionHandle> {
 
 /// Spawn a background task that keeps trying to connect (bounded backoff)
 /// until it succeeds or the session ends, then delivers the connection.
+/// `initial_delay` escalates across attempts in the orchestrator so a server
+/// that accepts the socket but rejects setup (close right after connect)
+/// cannot cause rapid live/reconnecting flapping.
 fn spawn_reconnect(
     app: AppHandle,
     config: AppConfig,
     alive: Arc<AtomicBool>,
+    api_version: String,
+    initial_delay: Duration,
 ) -> oneshot::Receiver<live::LiveConnection> {
     let (tx, rx) = oneshot::channel();
     tokio::spawn(async move {
+        tokio::time::sleep(initial_delay).await;
         let mut backoff = Duration::from_secs(1);
         loop {
             if !alive.load(Ordering::SeqCst) {
                 return;
             }
-            match live::connect(&config.api_key, &config.live_model, &config.target_language)
-                .await
+            match live::connect(
+                &config.api_key,
+                &config.live_model,
+                &config.target_language,
+                &api_version,
+            )
+            .await
             {
                 Ok(conn) => {
                     let _ = tx.send(conn);
@@ -169,8 +180,18 @@ async fn run_session(
 
     emit_status(&app, "connecting", "");
     let mut conn: Option<live::LiveConnection> = None;
+    let mut api_version = config.live_api_version.clone();
+    let mut reconnect_delay = Duration::ZERO;
+    let mut connected_at: Option<Instant> = None;
+    let mut early_closes = 0u32;
     let mut reconnect_rx: Option<oneshot::Receiver<live::LiveConnection>> =
-        Some(spawn_reconnect(app.clone(), config.clone(), alive.clone()));
+        Some(spawn_reconnect(
+            app.clone(),
+            config.clone(),
+            alive.clone(),
+            api_version.clone(),
+            reconnect_delay,
+        ));
     let mut gap_start_ms: Option<u64> = None;
 
     loop {
@@ -207,16 +228,10 @@ async fn run_session(
                 match newconn {
                     Ok(c) => {
                         conn = Some(c);
-                        if let Some(start) = gap_start_ms.take() {
-                            let now = last_chunk_ms.max(start);
-                            if now.saturating_sub(start) >= GAP_MARK_THRESHOLD_MS {
-                                let gap = assembler.gap(start, now);
-                                append_and_emit(&app, &mut store, &config, &gap);
-                            }
-                        }
-                        if !paused {
-                            emit_status(&app, "live", "");
-                        }
+                        connected_at = Some(Instant::now());
+                        // "live" is emitted on setupComplete (Ready), not
+                        // here: a socket that opens but gets its setup
+                        // rejected must not flash the live status.
                     }
                     Err(_) => { /* reconnect task ended with the session */ }
                 }
@@ -267,6 +282,15 @@ async fn run_session(
             event = async { conn.as_mut().unwrap().events_rx.recv().await }, if conn.is_some() => {
                 match event {
                     Some(LiveEvent::Ready) => {
+                        early_closes = 0;
+                        reconnect_delay = Duration::ZERO;
+                        if let Some(start) = gap_start_ms.take() {
+                            let now = last_chunk_ms.max(start);
+                            if now.saturating_sub(start) >= GAP_MARK_THRESHOLD_MS {
+                                let gap = assembler.gap(start, now);
+                                append_and_emit(&app, &mut store, &config, &gap);
+                            }
+                        }
                         if !paused {
                             emit_status(&app, "live", "");
                         }
@@ -311,16 +335,43 @@ async fn run_session(
                             Some(LiveEvent::Closed(r)) => r,
                             _ => "connection lost".to_string(),
                         };
+                        log::warn!("live connection closed: {reason}");
                         conn = None;
                         if gap_start_ms.is_none() {
                             gap_start_ms = Some(last_chunk_ms);
                         }
+                        // A close shortly after connecting means setup was
+                        // rejected, not a network drop. After three of those
+                        // in a row, try the other API version — preview
+                        // models move between v1alpha and v1beta.
+                        let early = connected_at
+                            .map(|t| t.elapsed() < Duration::from_secs(5))
+                            .unwrap_or(false);
+                        connected_at = None;
+                        if early {
+                            early_closes += 1;
+                            if early_closes >= 3 {
+                                early_closes = 0;
+                                api_version = if api_version == "v1alpha" {
+                                    "v1beta".into()
+                                } else {
+                                    "v1alpha".into()
+                                };
+                                log::warn!(
+                                    "live setup repeatedly rejected; trying API version {api_version}"
+                                );
+                            }
+                        }
+                        reconnect_delay = (reconnect_delay * 2 + Duration::from_secs(1))
+                            .min(MAX_BACKOFF);
                         emit_status(&app, "reconnecting", &reason);
                         if reconnect_rx.is_none() {
                             reconnect_rx = Some(spawn_reconnect(
                                 app.clone(),
                                 config.clone(),
                                 alive.clone(),
+                                api_version.clone(),
+                                reconnect_delay,
                             ));
                         }
                     }

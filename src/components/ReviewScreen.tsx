@@ -17,6 +17,7 @@ export function ReviewScreen() {
   const [polishedPath, setPolishedPath] = useState("");
   const [cleaning, setCleaning] = useState(false);
   const [error, setError] = useState("");
+  const [confirmClose, setConfirmClose] = useState(false);
 
   if (!review) return null;
 
@@ -141,10 +142,30 @@ export function ReviewScreen() {
         {error && <p className="error-text">{error}</p>}
 
         <div className="row end">
+          <button className="btn" onClick={() => setConfirmClose(true)}>
+            {dict.reviewClose}
+          </button>
           <button className="btn primary" onClick={done}>
             {dict.done}
           </button>
         </div>
+
+        {confirmClose && (
+          <div className="overlay">
+            <div className="sheet">
+              <h2>{dict.reviewCloseConfirm}</h2>
+              <p>{dict.reviewCloseBody}</p>
+              <div className="row end">
+                <button className="btn" onClick={() => setConfirmClose(false)}>
+                  {dict.keepReviewing}
+                </button>
+                <button className="btn danger" onClick={done}>
+                  {dict.reviewClose}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
