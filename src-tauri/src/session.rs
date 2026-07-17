@@ -348,9 +348,15 @@ async fn run_session(
                             .map(|t| t.elapsed() < Duration::from_secs(5))
                             .unwrap_or(false);
                         connected_at = None;
+                        // 1007 schema errors ("Invalid JSON payload…Unknown
+                        // name") mean this API version rejects our setup
+                        // shape — flip immediately instead of after three
+                        // tries.
+                        let schema_reject = reason.contains("Unknown name")
+                            || reason.contains("Invalid JSON payload");
                         if early {
                             early_closes += 1;
-                            if early_closes >= 3 {
+                            if schema_reject || early_closes >= 3 {
                                 early_closes = 0;
                                 api_version = if api_version == "v1alpha" {
                                     "v1beta".into()
@@ -358,7 +364,7 @@ async fn run_session(
                                     "v1alpha".into()
                                 };
                                 log::warn!(
-                                    "live setup repeatedly rejected; trying API version {api_version}"
+                                    "live setup rejected; trying API version {api_version}"
                                 );
                             }
                         }

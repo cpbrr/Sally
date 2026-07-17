@@ -72,16 +72,19 @@ pub async fn connect(
     // below, and translate models reject unknown/unsupported setup fields by
     // closing the socket — which showed up as rapid live/reconnecting
     // cycling.
+    // translationConfig nests inside generationConfig (confirmed against the
+    // WebSockets reference — a setup-level translationConfig is rejected
+    // with 1007 "Unknown name").
     let target_code = crate::lang::bcp47(target_language);
     let setup = json!({
         "setup": {
             "model": format!("models/{model}"),
             "generationConfig": {
-                "responseModalities": ["AUDIO"]
-            },
-            "translationConfig": {
-                "targetLanguageCode": target_code,
-                "echoTargetLanguage": true
+                "responseModalities": ["AUDIO"],
+                "translationConfig": {
+                    "targetLanguageCode": target_code,
+                    "echoTargetLanguage": true
+                }
             },
             "inputAudioTranscription": {},
             "outputAudioTranscription": {}

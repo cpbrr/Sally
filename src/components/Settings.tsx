@@ -32,6 +32,8 @@ export function Settings() {
 
   useEffect(() => {
     api.listAudioDevices().then(setDevices).catch(() => {});
+    // Show the stored key so the box never looks empty after saving.
+    api.getApiKey().then(setApiKey).catch(() => {});
   }, []);
 
   const pickFolder = async () => {
@@ -97,7 +99,6 @@ export function Settings() {
           <input
             type="password"
             value={apiKey}
-            placeholder={config?.has_api_key ? "••••••••" : ""}
             onChange={(e) => setApiKey(e.target.value)}
           />
         </label>
@@ -178,7 +179,7 @@ export function Settings() {
           {dict.transparency} ({alpha}%)
           <input
             type="range"
-            min={50}
+            min={10}
             max={100}
             value={alpha}
             onChange={(e) => changeAlpha(Number(e.target.value))}

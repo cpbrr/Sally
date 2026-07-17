@@ -42,6 +42,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_boot_info,
+            commands::get_api_key,
             commands::save_settings,
             commands::list_audio_devices,
             commands::test_connectivity,

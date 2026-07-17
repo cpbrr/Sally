@@ -3,7 +3,7 @@
 // meeting data), restored at startup by App.
 
 const KEY = "sally.alpha";
-const MIN = 50;
+const MIN = 10;
 const MAX = 100;
 
 export function loadTransparency(): number {
