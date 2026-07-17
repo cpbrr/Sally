@@ -23,7 +23,9 @@ const KEY_SYSTEM_DEVICE: &str = "SALLY_SYSTEM_DEVICE";
 const KEY_READOUT: &str = "SALLY_READOUT";
 const KEY_LIVE_API_VERSION: &str = "SALLY_LIVE_API_VERSION";
 
-pub const DEFAULT_LIVE_API_VERSION: &str = "v1alpha";
+// The documented WebSocket endpoint for live translation is v1beta; the
+// session still auto-flips to v1alpha if setup keeps getting rejected.
+pub const DEFAULT_LIVE_API_VERSION: &str = "v1beta";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {

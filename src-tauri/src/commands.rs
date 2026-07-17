@@ -138,6 +138,21 @@ pub async fn save_settings(
     Ok(redacted)
 }
 
+/// Return the stored API key for display in Settings. The key stays
+/// redacted in logs and error messages; showing the user their own key in
+/// the settings screen is intentional (plain-text `.env` design, §8) and
+/// avoids the empty-box confusion after saving.
+#[tauri::command]
+pub async fn get_api_key(state: State<'_, AppState>) -> Result<String> {
+    Ok(state
+        .config
+        .lock()
+        .await
+        .as_ref()
+        .map(|c| c.api_key.clone())
+        .unwrap_or_default())
+}
+
 #[derive(Serialize)]
 pub struct AudioDevices {
     pub inputs: Vec<String>,

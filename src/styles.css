@@ -211,19 +211,29 @@ select:focus, input:focus { outline: 1px solid var(--accent); }
 .session-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
+  gap: 6px;
+  padding: 6px 8px;
   background: var(--bg-panel);
   border-top: 1px solid var(--border);
   flex: none;
-  height: 40px;
+  min-height: 40px;
+}
+
+.session-bar .error-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
 }
 
 .elapsed {
   font-variant-numeric: tabular-nums;
   color: var(--text-dim);
   font-size: 12px;
-  min-width: 52px;
+  min-width: 44px;
+  flex: none;
 }
 
 .btn {
@@ -231,10 +241,14 @@ select:focus, input:focus { outline: 1px solid var(--accent); }
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 5px;
-  padding: 5px 12px;
+  padding: 5px 10px;
   font-size: 12px;
   cursor: pointer;
   font-family: var(--font);
+  /* Never wrap button labels onto two lines (was clipping "End Meeting" /
+     "Tạm dừng" / "Kết thúc" at the window edge). */
+  white-space: nowrap;
+  flex: none;
 }
 .btn:hover { border-color: var(--accent); }
 .btn:disabled { opacity: 0.5; cursor: default; }
@@ -274,7 +288,9 @@ input[type="range"] {
 }
 
 .sheet {
-  background: var(--bg-panel);
+  /* Sheets and popups stay fully opaque — the transparency slider applies
+     only to the base app surfaces. */
+  background: rgb(27, 30, 36);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 16px;
@@ -284,6 +300,13 @@ input[type="range"] {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.sheet select,
+.sheet input[type="text"],
+.sheet input[type="password"],
+.sheet .btn {
+  background: rgb(35, 39, 47);
 }
 
 .sheet h2 { font-size: 15px; }

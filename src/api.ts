@@ -72,6 +72,7 @@ export interface ReviewInfo {
 
 export const api = {
   getBootInfo: () => invoke<BootInfo>("get_boot_info"),
+  getApiKey: () => invoke<string>("get_api_key"),
   saveSettings: (payload: SettingsPayload) =>
     invoke<RedactedConfig>("save_settings", { payload }),
   listAudioDevices: () => invoke<AudioDevices>("list_audio_devices"),
