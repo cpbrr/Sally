@@ -1,0 +1,353 @@
+//! Tauri command layer: the only boundary the UI talks to (design §4.2
+//! item 8 — the UI never captures audio, calls Gemini, or writes files).
+
+use crate::config::{write_data_dir_pointer, AppConfig, RedactedConfig};
+use crate::error::{Result, SallyError};
+use crate::gemini::cleanup::{render_polished, split_sections, CleanupClient, SECTION_BUDGET};
+use crate::session::{Control, ReviewData, SessionHandle};
+use crate::store::MeetingStore;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+use tauri::{AppHandle, Manager, State};
+use tokio::sync::Mutex;
+
+#[derive(Default)]
+pub struct AppState {
+    pub config: Mutex<Option<AppConfig>>,
+    pub session: Mutex<Option<SessionHandle>>,
+    pub last_meeting: Mutex<Option<ReviewData>>,
+}
+
+fn app_config_dir(app: &AppHandle) -> Result<PathBuf> {
+    app.path()
+        .app_config_dir()
+        .map_err(|e| SallyError::Config(e.to_string()))
+}
+
+async fn require_config(state: &State<'_, AppState>) -> Result<AppConfig> {
+    state
+        .config
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| SallyError::Config("setup not completed".into()))
+}
+
+#[derive(Serialize)]
+pub struct BootInfo {
+    pub config: Option<RedactedConfig>,
+    pub needs_setup: bool,
+    pub pending_recoveries: usize,
+}
+
+#[tauri::command]
+pub async fn get_boot_info(app: AppHandle, state: State<'_, AppState>) -> Result<BootInfo> {
+    let cfg = state.config.lock().await.clone();
+    let pending = cfg
+        .as_ref()
+        .map(|c| MeetingStore::pending_recoveries(&c.recovery_dir()).len())
+        .unwrap_or(0);
+    let needs_setup = cfg
+        .as_ref()
+        .map(|c| c.api_key.trim().is_empty())
+        .unwrap_or(true);
+    let _ = app;
+    Ok(BootInfo {
+        config: cfg.map(|c| c.redacted()),
+        needs_setup,
+        pending_recoveries: pending,
+    })
+}
+
+#[derive(Deserialize)]
+pub struct SettingsPayload {
+    pub data_dir: Option<String>,
+    pub api_key: Option<String>,
+    pub live_model: Option<String>,
+    pub cleanup_model: Option<String>,
+    pub target_language: Option<String>,
+    pub ui_language: Option<String>,
+    pub diarization_enabled: Option<bool>,
+    pub always_on_top: Option<bool>,
+    pub mic_device: Option<String>,
+    pub system_device: Option<String>,
+}
+
+/// Create or update configuration. Used by both first-run setup and the
+/// settings screen. Persists to `.env` in the data folder (design §8).
+#[tauri::command]
+pub async fn save_settings(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    payload: SettingsPayload,
+) -> Result<RedactedConfig> {
+    let mut guard = state.config.lock().await;
+    let mut cfg = match (guard.clone(), &payload.data_dir) {
+        (Some(existing), None) => existing,
+        (Some(mut existing), Some(dir)) => {
+            existing.data_dir = PathBuf::from(dir);
+            existing
+        }
+        (None, Some(dir)) => AppConfig::new(PathBuf::from(dir)),
+        (None, None) => {
+            return Err(SallyError::Config(
+                "select a Sally data folder first".into(),
+            ))
+        }
+    };
+    if let Some(v) = payload.api_key {
+        cfg.api_key = v;
+    }
+    if let Some(v) = payload.live_model {
+        if !v.trim().is_empty() {
+            cfg.live_model = v;
+        }
+    }
+    if let Some(v) = payload.cleanup_model {
+        if !v.trim().is_empty() {
+            cfg.cleanup_model = v;
+        }
+    }
+    if let Some(v) = payload.target_language {
+        cfg.target_language = v;
+    }
+    if let Some(v) = payload.ui_language {
+        cfg.ui_language = v;
+    }
+    if let Some(v) = payload.diarization_enabled {
+        cfg.diarization_enabled = v;
+    }
+    if let Some(v) = payload.always_on_top {
+        cfg.always_on_top = v;
+    }
+    if let Some(v) = payload.mic_device {
+        cfg.mic_device = v;
+    }
+    if let Some(v) = payload.system_device {
+        cfg.system_device = v;
+    }
+    cfg.save()?;
+    write_data_dir_pointer(&app_config_dir(&app)?, &cfg.data_dir)?;
+    let redacted = cfg.redacted();
+    *guard = Some(cfg);
+    Ok(redacted)
+}
+
+#[derive(Serialize)]
+pub struct AudioDevices {
+    pub inputs: Vec<String>,
+    pub outputs: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn list_audio_devices() -> Result<AudioDevices> {
+    // Device enumeration can block; run it off the async runtime threads.
+    tokio::task::spawn_blocking(|| AudioDevices {
+        inputs: crate::audio::capture::list_input_devices(),
+        outputs: crate::audio::capture::list_output_devices(),
+    })
+    .await
+    .map_err(|e| SallyError::Audio(e.to_string()))
+}
+
+/// Setup step 6: verify the API key and network path without starting a
+/// live session (design §6.3).
+#[tauri::command]
+pub async fn test_connectivity(state: State<'_, AppState>) -> Result<bool> {
+    let cfg = require_config(&state).await?;
+    if cfg.api_key.trim().is_empty() {
+        return Err(SallyError::Config("no API key configured".into()));
+    }
+    let url = format!(
+        "{}/models?key={}&pageSize=1",
+        crate::gemini::REST_BASE,
+        cfg.api_key
+    );
+    let resp = reqwest::get(&url).await.map_err(|e| {
+        SallyError::Gemini(crate::config::redact_key(
+            &format!("connectivity test failed: {e}"),
+            &cfg.api_key,
+        ))
+    })?;
+    if resp.status().is_success() {
+        Ok(true)
+    } else {
+        Err(SallyError::Gemini(format!(
+            "API key rejected (HTTP {})",
+            resp.status()
+        )))
+    }
+}
+
+#[tauri::command]
+pub async fn start_meeting(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target_language: Option<String>,
+) -> Result<()> {
+    let mut session_guard = state.session.lock().await;
+    if session_guard.is_some() {
+        return Err(SallyError::Session("a meeting is already running".into()));
+    }
+    let mut cfg = require_config(&state).await?;
+    if let Some(lang) = target_language {
+        if !lang.trim().is_empty() && lang != cfg.target_language {
+            cfg.target_language = lang;
+            cfg.save()?;
+            *state.config.lock().await = Some(cfg.clone());
+        }
+    }
+    let handle = crate::session::start(app, cfg)?;
+    *session_guard = Some(handle);
+    Ok(())
+}
+
+async fn send_control(state: &State<'_, AppState>, ctrl: Control) -> Result<()> {
+    let guard = state.session.lock().await;
+    let session = guard
+        .as_ref()
+        .ok_or_else(|| SallyError::Session("no active meeting".into()))?;
+    session
+        .control_tx
+        .send(ctrl)
+        .await
+        .map_err(|_| SallyError::Session("meeting already ended".into()))
+}
+
+#[tauri::command]
+pub async fn pause_meeting(state: State<'_, AppState>) -> Result<()> {
+    send_control(&state, Control::Pause).await
+}
+
+#[tauri::command]
+pub async fn resume_meeting(state: State<'_, AppState>) -> Result<()> {
+    send_control(&state, Control::Resume).await
+}
+
+#[derive(Serialize)]
+pub struct ReviewInfo {
+    pub raw_path: String,
+    pub speakers: Vec<String>,
+}
+
+/// End the meeting and enter review (design §6.4). The raw transcript is
+/// already preserved before this returns.
+#[tauri::command]
+pub async fn end_meeting(state: State<'_, AppState>) -> Result<ReviewInfo> {
+    let mut handle = {
+        let mut guard = state.session.lock().await;
+        guard
+            .take()
+            .ok_or_else(|| SallyError::Session("no active meeting".into()))?
+    };
+    let _ = handle.control_tx.send(Control::Stop).await;
+    let done_rx = handle
+        .done_rx
+        .take()
+        .ok_or_else(|| SallyError::Session("meeting already collected".into()))?;
+    let review = done_rx
+        .await
+        .map_err(|_| SallyError::Session("session task dropped".into()))??;
+    let info = ReviewInfo {
+        raw_path: review.store.raw_path().to_string_lossy().into_owned(),
+        speakers: review.speakers.clone(),
+    };
+    *state.last_meeting.lock().await = Some(review);
+    Ok(info)
+}
+
+/// Apply review actions: global speaker rename/merge and optional meeting
+/// rename (design §6.4, §8).
+#[tauri::command]
+pub async fn apply_review(
+    state: State<'_, AppState>,
+    renames: BTreeMap<String, String>,
+    meeting_title: Option<String>,
+) -> Result<ReviewInfo> {
+    let mut guard = state.last_meeting.lock().await;
+    let review = guard
+        .as_mut()
+        .ok_or_else(|| SallyError::Session("no finished meeting to review".into()))?;
+    review.store.apply_speaker_renames(&renames)?;
+    // Track renamed labels for the cleanup prompt and UI list.
+    for s in review.speakers.iter_mut() {
+        if let Some(new) = renames.get(s) {
+            *s = new.clone();
+        }
+    }
+    review.speakers.sort();
+    review.speakers.dedup();
+    if let Some(title) = meeting_title {
+        if !title.trim().is_empty() {
+            review.store.rename_meeting(&title)?;
+        }
+    }
+    Ok(ReviewInfo {
+        raw_path: review.store.raw_path().to_string_lossy().into_owned(),
+        speakers: review.speakers.clone(),
+    })
+}
+
+/// Timestamp-free copy; raw file untouched (design §2).
+#[tauri::command]
+pub async fn export_without_timestamps(state: State<'_, AppState>) -> Result<String> {
+    let guard = state.last_meeting.lock().await;
+    let review = guard
+        .as_ref()
+        .ok_or_else(|| SallyError::Session("no finished meeting".into()))?;
+    let path = review.store.export_without_timestamps()?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+/// Manual, optional cleanup (design §9). Writes the polished file only after
+/// every section and the consolidation succeed; never touches the raw file.
+#[tauri::command]
+pub async fn clean_and_summarize(
+    state: State<'_, AppState>,
+    include_timestamps: bool,
+) -> Result<String> {
+    let cfg = require_config(&state).await?;
+    let (raw_text, polished_path, title) = {
+        let guard = state.last_meeting.lock().await;
+        let review = guard
+            .as_ref()
+            .ok_or_else(|| SallyError::Session("no finished meeting".into()))?;
+        let text = std::fs::read_to_string(review.store.raw_path())?;
+        let title = text
+            .lines()
+            .next()
+            .unwrap_or("# Meeting")
+            .trim_start_matches('#')
+            .trim()
+            .to_string();
+        (text, review.store.polished_path(), title)
+    };
+
+    let client = CleanupClient::new(cfg.api_key.clone(), cfg.cleanup_model.clone());
+    let sections = split_sections(&raw_text, SECTION_BUDGET);
+    let mut cleaned_parts = Vec::with_capacity(sections.len());
+    for section in &sections {
+        cleaned_parts.push(client.clean_section(section, include_timestamps).await?);
+    }
+    let cleaned = cleaned_parts.join("\n\n");
+    let summary = client.summarize(&cleaned).await?;
+    let polished = render_polished(&title, &summary, &cleaned);
+
+    // Publish atomically only after all stages succeeded (design §9).
+    let tmp = polished_path.with_extension("md.tmp");
+    std::fs::write(&tmp, polished)?;
+    std::fs::rename(&tmp, &polished_path)?;
+    Ok(polished_path.to_string_lossy().into_owned())
+}
+
+/// Recover interrupted meetings from journals into Markdown (design §8.2).
+#[tauri::command]
+pub async fn recover_meetings(state: State<'_, AppState>) -> Result<Vec<String>> {
+    let cfg = require_config(&state).await?;
+    let recovered = MeetingStore::recover(&cfg.recovery_dir())?;
+    Ok(recovered
+        .into_iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect())
+}

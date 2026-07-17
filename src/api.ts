@@ -1,0 +1,117 @@
+// Typed boundary to the Rust core. The UI renders state received from Rust
+// and never captures audio, calls Gemini, or writes meeting files itself.
+
+import { invoke } from "@tauri-apps/api/core";
+import { listen, UnlistenFn } from "@tauri-apps/api/event";
+
+export interface RedactedConfig {
+  data_dir: string;
+  has_api_key: boolean;
+  live_model: string;
+  cleanup_model: string;
+  target_language: string;
+  ui_language: string;
+  diarization_enabled: boolean;
+  always_on_top: boolean;
+  mic_device: string;
+  system_device: string;
+}
+
+export interface BootInfo {
+  config: RedactedConfig | null;
+  needs_setup: boolean;
+  pending_recoveries: number;
+}
+
+export interface SettingsPayload {
+  data_dir?: string;
+  api_key?: string;
+  live_model?: string;
+  cleanup_model?: string;
+  target_language?: string;
+  ui_language?: string;
+  diarization_enabled?: boolean;
+  always_on_top?: boolean;
+  mic_device?: string;
+  system_device?: string;
+}
+
+export interface AudioDevices {
+  inputs: string[];
+  outputs: string[];
+}
+
+export interface TimelineEntry {
+  index: number;
+  kind: "speech" | "gap";
+  start_ms: number;
+  end_ms: number;
+  speaker: string;
+  original: string;
+  translated: string;
+}
+
+export interface PartialEntry {
+  start_ms: number;
+  speaker: string;
+  original: string;
+  translated: string;
+}
+
+export interface StatusPayload {
+  state: string;
+  detail: string;
+}
+
+export interface ReviewInfo {
+  raw_path: string;
+  speakers: string[];
+}
+
+export const api = {
+  getBootInfo: () => invoke<BootInfo>("get_boot_info"),
+  saveSettings: (payload: SettingsPayload) =>
+    invoke<RedactedConfig>("save_settings", { payload }),
+  listAudioDevices: () => invoke<AudioDevices>("list_audio_devices"),
+  testConnectivity: () => invoke<boolean>("test_connectivity"),
+  startMeeting: (targetLanguage?: string) =>
+    invoke<void>("start_meeting", { targetLanguage: targetLanguage ?? null }),
+  pauseMeeting: () => invoke<void>("pause_meeting"),
+  resumeMeeting: () => invoke<void>("resume_meeting"),
+  endMeeting: () => invoke<ReviewInfo>("end_meeting"),
+  applyReview: (renames: Record<string, string>, meetingTitle?: string) =>
+    invoke<ReviewInfo>("apply_review", {
+      renames,
+      meetingTitle: meetingTitle ?? null,
+    }),
+  exportWithoutTimestamps: () => invoke<string>("export_without_timestamps"),
+  cleanAndSummarize: (includeTimestamps: boolean) =>
+    invoke<string>("clean_and_summarize", { includeTimestamps }),
+  recoverMeetings: () => invoke<string[]>("recover_meetings"),
+};
+
+export function onEntry(cb: (e: TimelineEntry) => void): Promise<UnlistenFn> {
+  return listen<TimelineEntry>("sally://entry", (ev) => cb(ev.payload));
+}
+
+export function onPartial(
+  cb: (e: PartialEntry | null) => void
+): Promise<UnlistenFn> {
+  return listen<PartialEntry | null>("sally://partial", (ev) =>
+    cb(ev.payload)
+  );
+}
+
+export function onStatus(cb: (s: StatusPayload) => void): Promise<UnlistenFn> {
+  return listen<StatusPayload>("sally://status", (ev) => cb(ev.payload));
+}
+
+export function formatTimestamp(ms: number): string {
+  const totalS = Math.floor(ms / 1000);
+  const h = Math.floor(totalS / 3600);
+  const m = Math.floor((totalS % 3600) / 60);
+  const s = totalS % 60;
+  const mm = String(m).padStart(2, "0");
+  const ss = String(s).padStart(2, "0");
+  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
