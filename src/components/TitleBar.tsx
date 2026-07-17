@@ -30,6 +30,11 @@ export function TitleBar() {
     setConfig(updated);
   };
 
+  const toggleReadout = async () => {
+    const updated = await api.setReadout(!(config?.readout_enabled ?? false));
+    setConfig(updated);
+  };
+
   const statusKey = STATUS_KEYS[status] ?? "statusIdle";
   const statusLabel = (dict as unknown as Record<string, string>)[statusKey];
 
@@ -60,6 +65,13 @@ export function TitleBar() {
           </option>
         ))}
       </select>
+      <button
+        className={`icon-btn ${config?.readout_enabled ? "active" : ""}`}
+        title={config?.readout_enabled ? dict.readoutOff : dict.readoutOn}
+        onClick={toggleReadout}
+      >
+        {config?.readout_enabled ? "🔊" : "🔈"}
+      </button>
       <button
         className={`icon-btn ${pinned ? "active" : ""}`}
         title={pinned ? dict.unpin : dict.pin}

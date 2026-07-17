@@ -5,11 +5,12 @@
 //! with the UI through Tauri events and with commands through a control
 //! channel. The session clock is a monotonic `Instant` (design §5).
 
-use crate::audio::{capture, pipeline::Pipeline, RawFrame};
+use crate::audio::{capture, pipeline::Pipeline, playback::Player, RawFrame};
 use crate::config::AppConfig;
 use crate::diarization::Diarizer;
 use crate::error::{Result, SallyError};
 use crate::gemini::live::{self, LiveEvent};
+use crate::readout::ReadoutGate;
 use crate::store::{MeetingStore, RecoveryJournal};
 use crate::timeline::Assembler;
 use serde::Serialize;
@@ -36,6 +37,8 @@ pub enum Control {
     Pause,
     Resume,
     Stop,
+    /// Toggle translated-voice readout mid-meeting.
+    SetReadout(bool),
 }
 
 /// Returned to the command layer when the meeting ends.
@@ -157,6 +160,13 @@ async fn run_session(
     let mut journal_tick = tokio::time::interval(JOURNAL_INTERVAL);
     let alive = Arc::new(AtomicBool::new(true));
 
+    // Readout: translated audio plays only for passages whose source
+    // language differs from the target (never Vietnamese-to-Vietnamese).
+    let target_code = crate::lang::bcp47(&config.target_language).to_string();
+    let mut readout_enabled = config.readout_enabled;
+    let mut gate = ReadoutGate::new(&target_code);
+    let mut player: Option<Player> = None;
+
     emit_status(&app, "connecting", "");
     let mut conn: Option<live::LiveConnection> = None;
     let mut reconnect_rx: Option<oneshot::Receiver<live::LiveConnection>> =
@@ -170,11 +180,22 @@ async fn run_session(
                 match ctrl {
                     Some(Control::Pause) => {
                         paused = true;
+                        if let Some(p) = player.as_ref() {
+                            p.clear();
+                        }
                         emit_status(&app, "paused", "");
                     }
                     Some(Control::Resume) => {
                         paused = false;
                         emit_status(&app, if conn.is_some() { "live" } else { "reconnecting" }, "");
+                    }
+                    Some(Control::SetReadout(enabled)) => {
+                        readout_enabled = enabled;
+                        if !enabled {
+                            if let Some(p) = player.as_ref() {
+                                p.clear();
+                            }
+                        }
                     }
                     Some(Control::Stop) | None => break,
                 }
@@ -228,6 +249,14 @@ async fn run_session(
                 if last_fragment_ms > 0
                     && last_chunk_ms.saturating_sub(last_fragment_ms) > TURN_IDLE_FLUSH_MS
                 {
+                    if readout_enabled {
+                        let original = assembler
+                            .partial()
+                            .map(|p| p.original)
+                            .unwrap_or_default();
+                        let tail = gate.end_turn(&original);
+                        play(&mut player, &mut readout_enabled, &tail);
+                    }
                     finalize_entry(&app, &mut assembler, diarizer.as_ref(), &mut store,
                                    &config, &mut speakers);
                     last_fragment_ms = 0;
@@ -252,7 +281,25 @@ async fn run_session(
                         last_fragment_ms = last_chunk_ms;
                         emit_partial(&app, &assembler);
                     }
+                    Some(LiveEvent::Audio(samples)) => {
+                        if readout_enabled && !paused {
+                            let original = assembler
+                                .partial()
+                                .map(|p| p.original)
+                                .unwrap_or_default();
+                            let playable = gate.push_audio(samples, &original);
+                            play(&mut player, &mut readout_enabled, &playable);
+                        }
+                    }
                     Some(LiveEvent::TurnComplete) => {
+                        if readout_enabled {
+                            let original = assembler
+                                .partial()
+                                .map(|p| p.original)
+                                .unwrap_or_default();
+                            let tail = gate.end_turn(&original);
+                            play(&mut player, &mut readout_enabled, &tail);
+                        }
                         finalize_entry(&app, &mut assembler, diarizer.as_ref(), &mut store,
                                        &config, &mut speakers);
                         last_fragment_ms = 0;
@@ -312,6 +359,27 @@ async fn run_session(
         store,
         speakers: speakers.into_iter().collect(),
     }));
+}
+
+/// Send gated samples to the output device, opening it lazily. If no output
+/// device exists, readout turns itself off instead of failing the session.
+fn play(player: &mut Option<Player>, readout_enabled: &mut bool, samples: &[i16]) {
+    if samples.is_empty() {
+        return;
+    }
+    if player.is_none() {
+        match Player::new() {
+            Ok(p) => *player = Some(p),
+            Err(e) => {
+                log::error!("readout unavailable: {e}");
+                *readout_enabled = false;
+                return;
+            }
+        }
+    }
+    if let Some(p) = player.as_mut() {
+        p.push(samples);
+    }
 }
 
 fn finalize_entry(

@@ -1,0 +1,184 @@
+//! Lightweight script/language heuristics for the readout gate.
+//!
+//! Sally reads translated audio aloud only for passages whose source
+//! language differs from the target language (e.g. target Vietnamese:
+//! English and Japanese speech is read out, Vietnamese speech is not).
+//! Gemini Live Translate detects languages automatically but does not label
+//! per-turn source language, so classification runs locally on the original
+//! transcript text. This is a heuristic: exact for distinct scripts
+//! (Japanese, Korean, Chinese, Thai, Vietnamese diacritics), coarse for
+//! plain-Latin languages, which all map to `latin`.
+
+/// Map a display language name (Settings dropdown) to a BCP-47 code for
+/// `translationConfig.targetLanguageCode`.
+pub fn bcp47(display_name: &str) -> &'static str {
+    match display_name.to_ascii_lowercase().as_str() {
+        "vietnamese" => "vi",
+        "english" => "en",
+        "japanese" => "ja",
+        "korean" => "ko",
+        "chinese" => "zh",
+        "french" => "fr",
+        "german" => "de",
+        "spanish" => "es",
+        "portuguese" => "pt",
+        "thai" => "th",
+        "indonesian" => "id",
+        "hindi" => "hi",
+        _ => "en",
+    }
+}
+
+/// Vietnamese-specific letters: đ/ơ/ư/ă/â-family plus tone-marked vowels
+/// that rarely appear together in other Latin orthographies.
+const VIETNAMESE_MARKERS: &str = "\
+đĐơƠưƯăĂ\
+ạảấầẩẫậắằẳẵặ\
+ẹẻẽếềểễệ\
+ỉĩị\
+ọỏốồổỗộớờởỡợ\
+ụủứừửữự\
+ỳỵỷỹ\
+ẠẢẤẦẨẪẬẮẰẲẴẶ\
+ẸẺẼẾỀỂỄỆ\
+ỈĨỊ\
+ỌỎỐỒỔỖỘỚỜỞỠỢ\
+ỤỦỨỪỬỮỰ\
+ỲỴỶỸ";
+
+/// Detect the dominant script/language of a text fragment.
+/// Returns a BCP-47-ish tag, or `latin` when it is Latin script without
+/// Vietnamese markers (English, French, Spanish, … are indistinguishable
+/// cheaply), or `None` when there are no letters yet.
+pub fn detect(text: &str) -> Option<&'static str> {
+    let mut kana = 0usize;
+    let mut cjk = 0usize;
+    let mut hangul = 0usize;
+    let mut thai = 0usize;
+    let mut devanagari = 0usize;
+    let mut latin = 0usize;
+    let mut viet = 0usize;
+    let mut letters = 0usize;
+
+    for c in text.chars() {
+        let u = c as u32;
+        match u {
+            0x3040..=0x30FF => {
+                kana += 1;
+                letters += 1;
+            }
+            0x4E00..=0x9FFF | 0x3400..=0x4DBF => {
+                cjk += 1;
+                letters += 1;
+            }
+            0xAC00..=0xD7AF | 0x1100..=0x11FF => {
+                hangul += 1;
+                letters += 1;
+            }
+            0x0E00..=0x0E7F => {
+                thai += 1;
+                letters += 1;
+            }
+            0x0900..=0x097F => {
+                devanagari += 1;
+                letters += 1;
+            }
+            _ if c.is_alphabetic() => {
+                latin += 1;
+                letters += 1;
+                if VIETNAMESE_MARKERS.contains(c) {
+                    viet += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if letters == 0 {
+        return None;
+    }
+    // Any kana means Japanese even among kanji (distinguishes ja from zh).
+    if kana > 0 {
+        return Some("ja");
+    }
+    if hangul * 2 > letters {
+        return Some("ko");
+    }
+    if cjk * 2 > letters {
+        return Some("zh");
+    }
+    if thai * 2 > letters {
+        return Some("th");
+    }
+    if devanagari * 2 > letters {
+        return Some("hi");
+    }
+    if latin > 0 {
+        if viet > 0 {
+            return Some("vi");
+        }
+        return Some("latin");
+    }
+    None
+}
+
+/// Whether a passage with this original text should be read aloud when
+/// translating into `target_code`. Passages already in the target language
+/// are skipped; unknown/undetected text is read out (fail open — the user
+/// asked for the translation).
+pub fn should_read_out(original_text: &str, target_code: &str) -> bool {
+    match detect(original_text) {
+        Some(code) => code != target_code,
+        None => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_vietnamese() {
+        assert_eq!(detect("Chúng ta sẽ họp vào thứ Sáu tới nhé"), Some("vi"));
+        assert_eq!(detect("Được rồi, cảm ơn mọi người"), Some("vi"));
+    }
+
+    #[test]
+    fn detects_japanese_and_chinese() {
+        assert_eq!(detect("来週の金曜日までにお願いします"), Some("ja"));
+        assert_eq!(detect("我们下周五开会"), Some("zh"));
+    }
+
+    #[test]
+    fn detects_korean_thai_hindi() {
+        assert_eq!(detect("다음 주 금요일까지 부탁드립니다"), Some("ko"));
+        assert_eq!(detect("ประชุมวันศุกร์หน้า"), Some("th"));
+        assert_eq!(detect("अगले शुक्रवार तक"), Some("hi"));
+    }
+
+    #[test]
+    fn plain_latin_is_generic() {
+        assert_eq!(detect("Let's meet next Friday about the deadline"), Some("latin"));
+        assert_eq!(detect("123 …!?"), None);
+    }
+
+    #[test]
+    fn readout_gate_skips_target_language_only() {
+        // Target Vietnamese: EN and JA read out, VI skipped.
+        assert!(should_read_out("next Friday deadline question", "vi"));
+        assert!(should_read_out("来週の金曜日ですか", "vi"));
+        assert!(!should_read_out("hạn chót là thứ Sáu tuần sau phải không", "vi"));
+        // Target Japanese: JA skipped, VI read out.
+        assert!(!should_read_out("承知しました", "ja"));
+        assert!(should_read_out("tôi hiểu rồi ạ", "ja"));
+        // Undetected text fails open.
+        assert!(should_read_out("", "vi"));
+    }
+
+    #[test]
+    fn bcp47_mapping() {
+        assert_eq!(bcp47("Vietnamese"), "vi");
+        assert_eq!(bcp47("Japanese"), "ja");
+        assert_eq!(bcp47("Unknown Language"), "en");
+    }
+}

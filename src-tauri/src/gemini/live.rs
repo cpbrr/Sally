@@ -24,6 +24,9 @@ pub enum LiveEvent {
     Translated(String),
     /// The model finished a turn; the assembler finalizes the entry.
     TurnComplete,
+    /// Translated audio chunk: 24 kHz mono i16 PCM. Played only when the
+    /// readout toggle is on and the readout gate allows it; never saved.
+    Audio(Vec<i16>),
     /// Connection ended (reason, already key-redacted).
     Closed(String),
 }
@@ -52,20 +55,32 @@ pub async fn connect(
         .map_err(|e| SallyError::Gemini(redact(format!("live connect failed: {e}"))))?;
     let (mut sink, mut stream) = ws.split();
 
-    // Setup message: request audio-out modality (required by live-translate
-    // models) plus transcriptions of both directions. The audio itself is
-    // discarded in the read loop.
+    // Setup message: audio-out modality (required by live-translate models),
+    // transcriptions of both directions, and translationConfig with a BCP-47
+    // target. Source languages are auto-detected per passage, so meetings
+    // mixing e.g. English + Japanese + Vietnamese need no per-language
+    // configuration. `echoTargetLanguage: true` keeps transcript text for
+    // passages already in the target language; the local readout gate
+    // decides separately whether their audio is played.
+    let target_code = crate::lang::bcp47(target_language);
     let setup = json!({
         "setup": {
             "model": format!("models/{model}"),
             "generationConfig": {
                 "responseModalities": ["AUDIO"]
             },
+            "translationConfig": {
+                "targetLanguageCode": target_code,
+                "echoTargetLanguage": true
+            },
             "systemInstruction": {
                 "parts": [{
                     "text": format!(
-                        "You are a live meeting translator. Detect the source language \
-                         automatically and translate everything you hear into {target_language}. \
+                        "You are a live meeting translator. Speakers may mix several \
+                         languages in one meeting and switch languages mid-sentence. \
+                         Detect the source language of each passage automatically and \
+                         translate everything you hear into {target_language}. If a \
+                         passage is already in {target_language}, transcribe it as-is. \
                          Translate faithfully without adding commentary."
                     )
                 }]
@@ -149,13 +164,37 @@ pub async fn connect(
 }
 
 /// Translate one server JSON message into client events. Model audio parts
-/// (`inlineData`) are intentionally ignored — never played, never saved.
+/// (`inlineData`, 24 kHz mono PCM) become `Audio` events for the readout
+/// gate; they are never saved to disk.
 pub fn parse_server_message(value: &Value) -> Vec<LiveEvent> {
     let mut events = Vec::new();
     if value.get("setupComplete").is_some() {
         events.push(LiveEvent::Ready);
     }
     if let Some(content) = value.get("serverContent") {
+        if let Some(parts) = content.pointer("/modelTurn/parts").and_then(Value::as_array) {
+            for part in parts {
+                let is_audio = part
+                    .pointer("/inlineData/mimeType")
+                    .and_then(Value::as_str)
+                    .map(|m| m.starts_with("audio/"))
+                    .unwrap_or(false);
+                if !is_audio {
+                    continue;
+                }
+                if let Some(data) = part.pointer("/inlineData/data").and_then(Value::as_str) {
+                    if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(data) {
+                        let samples: Vec<i16> = bytes
+                            .chunks_exact(2)
+                            .map(|b| i16::from_le_bytes([b[0], b[1]]))
+                            .collect();
+                        if !samples.is_empty() {
+                            events.push(LiveEvent::Audio(samples));
+                        }
+                    }
+                }
+            }
+        }
         if let Some(text) = content
             .pointer("/inputTranscription/text")
             .and_then(Value::as_str)
@@ -207,11 +246,27 @@ mod tests {
     }
 
     #[test]
-    fn ignores_model_audio_parts() {
+    fn decodes_model_audio_parts_as_pcm() {
+        // Two little-endian i16 samples: 1 and -2.
+        let bytes: Vec<u8> = vec![1, 0, 0xFE, 0xFF];
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
         let msg = json!({
             "serverContent": {
                 "modelTurn": {
-                    "parts": [{ "inlineData": { "mimeType": "audio/pcm", "data": "AAAA" } }]
+                    "parts": [{ "inlineData": { "mimeType": "audio/pcm;rate=24000", "data": b64 } }]
+                }
+            }
+        });
+        let events = parse_server_message(&msg);
+        assert!(matches!(&events[..], [LiveEvent::Audio(s)] if s == &vec![1i16, -2]));
+    }
+
+    #[test]
+    fn ignores_non_audio_inline_data() {
+        let msg = json!({
+            "serverContent": {
+                "modelTurn": {
+                    "parts": [{ "inlineData": { "mimeType": "image/png", "data": "AAAA" } }]
                 }
             }
         });

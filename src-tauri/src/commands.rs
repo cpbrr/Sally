@@ -72,6 +72,7 @@ pub struct SettingsPayload {
     pub always_on_top: Option<bool>,
     pub mic_device: Option<String>,
     pub system_device: Option<String>,
+    pub readout_enabled: Option<bool>,
 }
 
 /// Create or update configuration. Used by both first-run setup and the
@@ -126,6 +127,9 @@ pub async fn save_settings(
     }
     if let Some(v) = payload.system_device {
         cfg.system_device = v;
+    }
+    if let Some(v) = payload.readout_enabled {
+        cfg.readout_enabled = v;
     }
     cfg.save()?;
     write_data_dir_pointer(&app_config_dir(&app)?, &cfg.data_dir)?;
@@ -218,6 +222,28 @@ async fn send_control(state: &State<'_, AppState>, ctrl: Control) -> Result<()> 
 #[tauri::command]
 pub async fn pause_meeting(state: State<'_, AppState>) -> Result<()> {
     send_control(&state, Control::Pause).await
+}
+
+/// Toggle translated-voice readout. Persists to `.env` and applies live to a
+/// running meeting. Playback stays gated per passage: only source languages
+/// that differ from the target are read aloud.
+#[tauri::command]
+pub async fn set_readout(state: State<'_, AppState>, enabled: bool) -> Result<RedactedConfig> {
+    let redacted = {
+        let mut guard = state.config.lock().await;
+        let cfg = guard
+            .as_mut()
+            .ok_or_else(|| SallyError::Config("setup not completed".into()))?;
+        cfg.readout_enabled = enabled;
+        cfg.save()?;
+        cfg.redacted()
+    };
+    // Forward to the running session, if any; no meeting running is fine.
+    let guard = state.session.lock().await;
+    if let Some(session) = guard.as_ref() {
+        let _ = session.control_tx.send(Control::SetReadout(enabled)).await;
+    }
+    Ok(redacted)
 }
 
 #[tauri::command]

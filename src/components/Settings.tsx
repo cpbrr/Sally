@@ -17,6 +17,7 @@ export function Settings() {
     system_device: config?.system_device ?? "",
     diarization_enabled: config?.diarization_enabled ?? true,
     always_on_top: config?.always_on_top ?? true,
+    readout_enabled: config?.readout_enabled ?? false,
     live_model: config?.live_model ?? "",
     cleanup_model: config?.cleanup_model ?? "",
   });
@@ -150,6 +151,18 @@ export function Settings() {
           />
           {dict.alwaysOnTopDefault}
         </label>
+
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={form.readout_enabled}
+            onChange={(e) =>
+              setForm({ ...form, readout_enabled: e.target.checked })
+            }
+          />
+          {dict.readoutSetting}
+        </label>
+        <p className="field-hint">{dict.readoutHint}</p>
 
         <label>
           {dict.liveModel}

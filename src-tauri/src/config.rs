@@ -20,6 +20,7 @@ const KEY_DIARIZATION: &str = "SALLY_DIARIZATION";
 const KEY_ALWAYS_ON_TOP: &str = "SALLY_ALWAYS_ON_TOP";
 const KEY_MIC_DEVICE: &str = "SALLY_MIC_DEVICE";
 const KEY_SYSTEM_DEVICE: &str = "SALLY_SYSTEM_DEVICE";
+const KEY_READOUT: &str = "SALLY_READOUT";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -33,6 +34,9 @@ pub struct AppConfig {
     pub always_on_top: bool,
     pub mic_device: String,
     pub system_device: String,
+    /// Read translated audio aloud for passages not already in the target
+    /// language. Off by default.
+    pub readout_enabled: bool,
 }
 
 impl AppConfig {
@@ -48,6 +52,7 @@ impl AppConfig {
             always_on_top: true,
             mic_device: String::new(),
             system_device: String::new(),
+            readout_enabled: false,
         }
     }
 
@@ -101,6 +106,7 @@ impl AppConfig {
         cfg.always_on_top = get(KEY_ALWAYS_ON_TOP) != "off";
         cfg.mic_device = get(KEY_MIC_DEVICE);
         cfg.system_device = get(KEY_SYSTEM_DEVICE);
+        cfg.readout_enabled = get(KEY_READOUT) == "on";
         Ok(cfg)
     }
 
@@ -130,6 +136,10 @@ impl AppConfig {
         );
         map.insert(KEY_MIC_DEVICE.into(), self.mic_device.clone());
         map.insert(KEY_SYSTEM_DEVICE.into(), self.system_device.clone());
+        map.insert(
+            KEY_READOUT.into(),
+            if self.readout_enabled { "on" } else { "off" }.into(),
+        );
         let mut out = String::from(
             "# Sally configuration. The API key is stored in plain text by design;\n\
              # anyone who can read this folder can obtain it.\n",
@@ -157,6 +167,7 @@ impl AppConfig {
             always_on_top: self.always_on_top,
             mic_device: self.mic_device.clone(),
             system_device: self.system_device.clone(),
+            readout_enabled: self.readout_enabled,
         }
     }
 }
@@ -173,6 +184,7 @@ pub struct RedactedConfig {
     pub always_on_top: bool,
     pub mic_device: String,
     pub system_device: String,
+    pub readout_enabled: bool,
 }
 
 /// Remove every occurrence of the API key from a message before it can reach

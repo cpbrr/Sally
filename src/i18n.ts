@@ -13,6 +13,11 @@ const en = {
   // title bar
   pin: "Keep on top",
   unpin: "Stop keeping on top",
+  readoutOn: "Read translation aloud (skips speech already in the target language)",
+  readoutOff: "Stop reading translation aloud",
+  readoutSetting: "Read translation aloud",
+  readoutHint:
+    "Speaks the translated voice for passages not already in the target language. Vietnamese speech is never read out when translating into Vietnamese. Use headphones to avoid the translation being captured back into the meeting.",
   settings: "Settings",
   targetLanguage: "Target language",
   // panels
@@ -99,6 +104,11 @@ const vi: typeof en = {
   statusStorageError: "Lỗi lưu trữ",
   pin: "Giữ trên cùng",
   unpin: "Bỏ giữ trên cùng",
+  readoutOn: "Đọc to bản dịch (bỏ qua lời nói đã ở ngôn ngữ đích)",
+  readoutOff: "Tắt đọc to bản dịch",
+  readoutSetting: "Đọc to bản dịch",
+  readoutHint:
+    "Phát giọng dịch cho các đoạn chưa ở ngôn ngữ đích. Lời nói tiếng Việt sẽ không được đọc to khi dịch sang tiếng Việt. Nên dùng tai nghe để giọng dịch không bị thu ngược vào cuộc họp.",
   settings: "Cài đặt",
   targetLanguage: "Ngôn ngữ đích",
   transcript: "Bản gốc",

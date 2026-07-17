@@ -1,0 +1,92 @@
+# Builds release artifacts for both supported platforms (design §12, §14):
+# - Windows 11 x64: portable ZIP (sally.exe + sample .env + docs)
+# - macOS 14+ Apple Silicon: .app in a DMG (unsigned unless Developer ID
+#   secrets are configured — signing/notarization per design §12.2 is a
+#   separate step once certificates exist)
+#
+# Runs on version tags (v*) and manually via workflow_dispatch.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - run: npx tauri build --no-bundle
+      - name: Package portable ZIP
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force staging | Out-Null
+          Copy-Item src-tauri/target/release/sally.exe staging/Sally.exe
+          Copy-Item .env.example staging/.env.example
+          Copy-Item README.md staging/README.md
+          Compress-Archive -Path staging/* -DestinationPath Sally-windows-x64-portable.zip -Force
+          (Get-FileHash Sally-windows-x64-portable.zip -Algorithm SHA256).Hash |
+            Out-File -Encoding ascii Sally-windows-x64-portable.zip.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sally-windows-x64-portable
+          path: |
+            Sally-windows-x64-portable.zip
+            Sally-windows-x64-portable.zip.sha256
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - run: npx tauri build --target aarch64-apple-darwin --bundles app,dmg
+      - name: Checksums
+        run: |
+          cd src-tauri/target/aarch64-apple-darwin/release/bundle/dmg
+          shasum -a 256 *.dmg > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sally-macos-aarch64
+          path: |
+            src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+            src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/SHA256SUMS
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: |
+            Sally-windows-x64-portable.zip
+            Sally-windows-x64-portable.zip.sha256
+            *.dmg
+            SHA256SUMS
