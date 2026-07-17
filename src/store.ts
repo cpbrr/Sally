@@ -1,0 +1,101 @@
+import { create } from "zustand";
+import {
+  PartialEntry,
+  RedactedConfig,
+  ReviewInfo,
+  TimelineEntry,
+} from "./api";
+import { dictionaries, Dict, UiLanguage } from "./i18n";
+
+export type Phase = "boot" | "setup" | "idle" | "live" | "review";
+
+interface SallyState {
+  phase: Phase;
+  config: RedactedConfig | null;
+  uiLanguage: UiLanguage;
+  dict: Dict;
+  status: string; // connecting | live | reconnecting | paused | ended | idle | storage-error
+  statusDetail: string;
+  entries: TimelineEntry[];
+  partial: PartialEntry | null;
+  review: ReviewInfo | null;
+  pendingRecoveries: number;
+  paused: boolean;
+  meetingStartedAt: number | null;
+  pausedAccumMs: number;
+  pausedSince: number | null;
+  showSettings: boolean;
+
+  setPhase: (p: Phase) => void;
+  setConfig: (c: RedactedConfig | null) => void;
+  setUiLanguage: (l: UiLanguage) => void;
+  setStatus: (state: string, detail: string) => void;
+  addEntry: (e: TimelineEntry) => void;
+  setPartial: (p: PartialEntry | null) => void;
+  setReview: (r: ReviewInfo | null) => void;
+  setPendingRecoveries: (n: number) => void;
+  startMeetingClock: () => void;
+  setPaused: (paused: boolean) => void;
+  resetMeeting: () => void;
+  setShowSettings: (v: boolean) => void;
+}
+
+export const useSally = create<SallyState>((set, get) => ({
+  phase: "boot",
+  config: null,
+  uiLanguage: "en",
+  dict: dictionaries.en,
+  status: "idle",
+  statusDetail: "",
+  entries: [],
+  partial: null,
+  review: null,
+  pendingRecoveries: 0,
+  paused: false,
+  meetingStartedAt: null,
+  pausedAccumMs: 0,
+  pausedSince: null,
+  showSettings: false,
+
+  setPhase: (phase) => set({ phase }),
+  setConfig: (config) => {
+    const lang = (config?.ui_language === "vi" ? "vi" : "en") as UiLanguage;
+    set({ config, uiLanguage: lang, dict: dictionaries[lang] });
+  },
+  setUiLanguage: (uiLanguage) =>
+    set({ uiLanguage, dict: dictionaries[uiLanguage] }),
+  setStatus: (status, statusDetail) => set({ status, statusDetail }),
+  addEntry: (e) => set({ entries: [...get().entries, e] }),
+  setPartial: (partial) => set({ partial }),
+  setReview: (review) => set({ review }),
+  setPendingRecoveries: (pendingRecoveries) => set({ pendingRecoveries }),
+  startMeetingClock: () =>
+    set({
+      meetingStartedAt: Date.now(),
+      pausedAccumMs: 0,
+      pausedSince: null,
+      paused: false,
+    }),
+  setPaused: (paused) => {
+    const s = get();
+    if (paused && !s.paused) {
+      set({ paused, pausedSince: Date.now() });
+    } else if (!paused && s.paused) {
+      const extra = s.pausedSince ? Date.now() - s.pausedSince : 0;
+      set({ paused, pausedAccumMs: s.pausedAccumMs + extra, pausedSince: null });
+    }
+  },
+  resetMeeting: () =>
+    set({
+      entries: [],
+      partial: null,
+      review: null,
+      paused: false,
+      meetingStartedAt: null,
+      pausedAccumMs: 0,
+      pausedSince: null,
+      status: "idle",
+      statusDetail: "",
+    }),
+  setShowSettings: (showSettings) => set({ showSettings }),
+}));
