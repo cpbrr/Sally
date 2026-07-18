@@ -1,12 +1,13 @@
 // Post-meeting flow. SavedPopup: small confirmation right after End
-// Meeting. ProcessingScreen: full-window pre-processing menu (not an
-// overlay) — meeting name, speaker renames, export/AI options, then a
-// success state with an Open Markdown button.
+// Meeting. ProcessingScreen: full-window pre-processing menu — pick any
+// past meeting from the raw folder, rename it and its speakers, choose
+// timestamps, optionally AI-clean, then open the result.
 
 import { openPath } from "@tauri-apps/plugin-opener";
-import { useState } from "react";
-import { api } from "../api";
+import { useEffect, useState } from "react";
+import { api, MeetingFile } from "../api";
 import { useSally } from "../store";
+import { IconFolder } from "./Icons";
 
 export function SavedPopup() {
   const { dict, setPhase } = useSally();
@@ -30,24 +31,51 @@ export function SavedPopup() {
 
 export function ProcessingScreen() {
   const { dict, review, setReview, setPhase } = useSally();
+  const [meetings, setMeetings] = useState<MeetingFile[]>([]);
   const [meetingTitle, setMeetingTitle] = useState("");
-  const [names, setNames] = useState<Record<string, string>>(() =>
-    Object.fromEntries((review?.speakers ?? []).map((s) => [s, s]))
-  );
+  const [names, setNames] = useState<Record<string, string>>({});
   const [includeTimestamps, setIncludeTimestamps] = useState(true);
-  const [exportCopy, setExportCopy] = useState(false);
   const [aiCleanup, setAiCleanup] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
   const [resultPath, setResultPath] = useState<string | null>(null);
 
-  if (!review) return null;
+  // Load the meeting list; open the newest when nothing is selected yet.
+  useEffect(() => {
+    api
+      .listMeetings()
+      .then((list) => {
+        setMeetings(list);
+        if (!review && list.length > 0) {
+          selectMeeting(list[0].path);
+        }
+      })
+      .catch((e) => setError(String(e)));
+    if (review) {
+      setNames(Object.fromEntries(review.speakers.map((s) => [s, s])));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const renameable = review.speakers.filter(
+  const selectMeeting = async (path: string) => {
+    setError("");
+    setResultPath(null);
+    setMeetingTitle("");
+    try {
+      const info = await api.openMeeting(path);
+      setReview(info);
+      setNames(Object.fromEntries(info.speakers.map((s) => [s, s])));
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const renameable = (review?.speakers ?? []).filter(
     (s) => s !== "You" && s !== "Meeting"
   );
 
   const run = async () => {
+    if (!review) return;
     setError("");
     setRunning(true);
     try {
@@ -59,14 +87,16 @@ export function ProcessingScreen() {
         meetingTitle.trim() || undefined
       );
       setReview(updated);
-      if (exportCopy) {
-        await api.exportWithoutTimestamps();
+      // One timestamps choice for everything: when excluded, the export
+      // copy is written and the AI cleanup also omits them.
+      let result = updated.raw_path;
+      if (!includeTimestamps) {
+        result = await api.exportWithoutTimestamps();
       }
       if (aiCleanup) {
-        setResultPath(await api.cleanAndSummarize(includeTimestamps));
-      } else {
-        setResultPath(updated.raw_path);
+        result = await api.cleanAndSummarize(includeTimestamps);
       }
+      setResultPath(result);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -79,16 +109,36 @@ export function ProcessingScreen() {
       <div className="processing-inner">
         <div className="row">
           <h2 style={{ flex: 1 }}>{dict.processingTitle}</h2>
-          <button
-            className="btn compact"
-            title={dict.openRawFolder}
-            onClick={() => openPath(review.raw_dir)}
-          >
-            📁
-          </button>
+          {review && (
+            <button
+              className="btn compact"
+              title={dict.openRawFolder}
+              onClick={() => openPath(review.raw_dir)}
+            >
+              <IconFolder />
+            </button>
+          )}
         </div>
 
-        {resultPath === null ? (
+        <label>
+          {dict.meetingPick}
+          <select
+            value={review?.raw_path ?? ""}
+            onChange={(e) => selectMeeting(e.target.value)}
+          >
+            {!review && <option value="">—</option>}
+            {review && !meetings.some((m) => m.path === review.raw_path) && (
+              <option value={review.raw_path}>{review.raw_path}</option>
+            )}
+            {meetings.map((m) => (
+              <option key={m.path} value={m.path}>
+                {m.name}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        {review && resultPath === null && (
           <>
             <label>
               {dict.meetingName}
@@ -122,11 +172,12 @@ export function ProcessingScreen() {
             <label className="check">
               <input
                 type="checkbox"
-                checked={exportCopy}
-                onChange={(e) => setExportCopy(e.target.checked)}
+                checked={includeTimestamps}
+                onChange={(e) => setIncludeTimestamps(e.target.checked)}
               />
-              {dict.exportNoTimestamps}
+              {dict.includeTimestamps}
             </label>
+            <p className="field-hint">{dict.includeTimestampsHint}</p>
 
             <label className="check">
               <input
@@ -137,17 +188,6 @@ export function ProcessingScreen() {
               {dict.aiCleanup}
             </label>
             <p className="field-hint">{dict.aiCleanupHint}</p>
-
-            {aiCleanup && (
-              <label className="check">
-                <input
-                  type="checkbox"
-                  checked={includeTimestamps}
-                  onChange={(e) => setIncludeTimestamps(e.target.checked)}
-                />
-                {dict.includeTimestamps}
-              </label>
-            )}
 
             {error && <p className="error-text">{error}</p>}
 
@@ -160,12 +200,14 @@ export function ProcessingScreen() {
               </button>
             </div>
           </>
-        ) : (
+        )}
+
+        {review && resultPath !== null && (
           <>
             <p className="ok-text">{dict.processingSuccess}</p>
             <p className="field-hint">{resultPath}</p>
             <div className="row end">
-              <button className="btn" onClick={() => setPhase("idle")}>
+              <button className="btn" onClick={() => setResultPath(null)}>
                 {dict.backToApp}
               </button>
               <button
@@ -176,6 +218,15 @@ export function ProcessingScreen() {
               </button>
             </div>
           </>
+        )}
+
+        {!review && error && <p className="error-text">{error}</p>}
+        {!review && (
+          <div className="row end">
+            <button className="btn" onClick={() => setPhase("idle")}>
+              {dict.backToApp}
+            </button>
+          </div>
         )}
       </div>
     </div>

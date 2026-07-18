@@ -28,14 +28,15 @@ const FB_SPEECH_RMS: f32 = 0.010;
 const FB_JOIN_SIMILARITY: f32 = 0.86;
 const FB_CONFIDENT_SIMILARITY: f32 = 0.55;
 
-// sherpa speaker-embedding tuning (ERes2Net cosine scores).
-const SHERPA_JOIN_SIMILARITY: f32 = 0.55;
-const SHERPA_CONFIDENT_SIMILARITY: f32 = 0.30;
+// sherpa speaker-embedding tuning (WeSpeaker CAM++ cosine scores: same
+// speaker typically 0.5–0.8, different speakers 0.05–0.3).
+const SHERPA_JOIN_SIMILARITY: f32 = 0.45;
+const SHERPA_CONFIDENT_SIMILARITY: f32 = 0.25;
 /// A new cluster is created only when the best similarity is below this —
 /// anything between it and the join threshold is assigned to the nearest
 /// cluster without moving its centroid. Prevents noise from spawning
 /// endless "Speaker N" labels whose dominance then flips entry labels.
-const NEW_CLUSTER_BELOW: f32 = 0.40;
+const NEW_CLUSTER_BELOW: f32 = 0.35;
 const MAX_CLUSTERS: usize = 8;
 /// Segments shorter than this yield unreliable embeddings and may never
 /// create a new cluster (they can still join existing ones).
@@ -322,6 +323,10 @@ pub struct DiarizerCore {
     backend: Backend,
     engine: ClusterEngine,
     ranges: Arc<Mutex<Vec<SpeakerRange>>>,
+    /// Optional per-meeting trace (`diar-debug.log` in the data folder):
+    /// one line per segment with the similarity score, for tuning. Never
+    /// contains audio or transcript text.
+    debug: Option<std::fs::File>,
 }
 
 impl DiarizerCore {
@@ -355,6 +360,7 @@ impl DiarizerCore {
             },
             engine: ClusterEngine::new(SHERPA_JOIN_SIMILARITY, SHERPA_CONFIDENT_SIMILARITY),
             ranges,
+            debug: None,
         })
     }
 
@@ -371,7 +377,23 @@ impl DiarizerCore {
             },
             engine: ClusterEngine::new(FB_JOIN_SIMILARITY, FB_CONFIDENT_SIMILARITY),
             ranges,
+            debug: None,
         }
+    }
+
+    fn record_range(&mut self, range: SpeakerRange) {
+        if let Some(f) = self.debug.as_mut() {
+            use std::io::Write;
+            let _ = writeln!(
+                f,
+                "{}..{}ms sim={:.3} {}",
+                range.start_ms,
+                range.end_ms,
+                range.confidence,
+                range.label.display()
+            );
+        }
+        self.ranges.lock().unwrap().push(range);
     }
 
     pub fn push_chunk(&mut self, samples: &[i16], t_ms: u64) {
@@ -401,40 +423,46 @@ impl DiarizerCore {
     }
 
     fn drain_sherpa_segments(&mut self) {
-        let Backend::Sherpa {
-            vad,
-            extractor,
-            clock,
-        } = &mut self.backend
-        else {
-            return;
-        };
-        while !vad.is_empty() {
-            let segment = vad.front();
-            vad.pop();
-            let n = segment.samples.len() as u64;
-            let start_ms = clock.to_ms(segment.start.max(0) as u64);
-            let end_ms = start_ms + n * 1000 / TARGET_SAMPLE_RATE as u64;
-            if end_ms.saturating_sub(start_ms) < MIN_SEGMENT_MS {
-                continue;
-            }
-            let embedding = match extractor
-                .compute_speaker_embedding(segment.samples, TARGET_SAMPLE_RATE)
-            {
-                Ok(e) => e,
-                Err(e) => {
-                    log::warn!("speaker embedding failed: {e}");
+        let mut sealed = Vec::new();
+        {
+            let Backend::Sherpa {
+                vad,
+                extractor,
+                clock,
+            } = &mut self.backend
+            else {
+                return;
+            };
+            while !vad.is_empty() {
+                let segment = vad.front();
+                vad.pop();
+                let n = segment.samples.len() as u64;
+                let start_ms = clock.to_ms(segment.start.max(0) as u64);
+                let end_ms = start_ms + n * 1000 / TARGET_SAMPLE_RATE as u64;
+                if end_ms.saturating_sub(start_ms) < MIN_SEGMENT_MS {
                     continue;
                 }
-            };
-            let allow_new = end_ms.saturating_sub(start_ms) >= MIN_NEW_CLUSTER_MS;
-            let (label, confidence) = self.engine.assign(&embedding, allow_new);
-            self.ranges.lock().unwrap().push(SpeakerRange {
-                start_ms,
-                end_ms,
-                label,
-                confidence,
-            });
+                let embedding = match extractor
+                    .compute_speaker_embedding(segment.samples, TARGET_SAMPLE_RATE)
+                {
+                    Ok(e) => e,
+                    Err(e) => {
+                        log::warn!("speaker embedding failed: {e}");
+                        continue;
+                    }
+                };
+                let allow_new = end_ms.saturating_sub(start_ms) >= MIN_NEW_CLUSTER_MS;
+                let (label, confidence) = self.engine.assign(&embedding, allow_new);
+                sealed.push(SpeakerRange {
+                    start_ms,
+                    end_ms,
+                    label,
+                    confidence,
+                });
+            }
+        }
+        for range in sealed {
+            self.record_range(range);
         }
     }
 
@@ -472,30 +500,33 @@ impl DiarizerCore {
     }
 
     fn fallback_close_segment(&mut self, start_ms: u64) {
-        let Backend::Fallback {
-            extractor,
-            seg_samples,
-            seg_start_ms,
-            seg_last_speech_ms,
-        } = &mut self.backend
-        else {
-            return;
+        let range = {
+            let Backend::Fallback {
+                extractor,
+                seg_samples,
+                seg_start_ms,
+                seg_last_speech_ms,
+            } = &mut self.backend
+            else {
+                return;
+            };
+            let end_ms = *seg_last_speech_ms;
+            let samples = std::mem::take(seg_samples);
+            *seg_start_ms = None;
+            if end_ms.saturating_sub(start_ms) < MIN_SEGMENT_MS {
+                return;
+            }
+            let embedding = extractor.embed(&samples);
+            let allow_new = end_ms.saturating_sub(start_ms) >= MIN_NEW_CLUSTER_MS;
+            let (label, confidence) = self.engine.assign(&embedding, allow_new);
+            SpeakerRange {
+                start_ms,
+                end_ms,
+                label,
+                confidence,
+            }
         };
-        let end_ms = *seg_last_speech_ms;
-        let samples = std::mem::take(seg_samples);
-        *seg_start_ms = None;
-        if end_ms.saturating_sub(start_ms) < MIN_SEGMENT_MS {
-            return;
-        }
-        let embedding = extractor.embed(&samples);
-        let allow_new = end_ms.saturating_sub(start_ms) >= MIN_NEW_CLUSTER_MS;
-        let (label, confidence) = self.engine.assign(&embedding, allow_new);
-        self.ranges.lock().unwrap().push(SpeakerRange {
-            start_ms,
-            end_ms,
-            label,
-            confidence,
-        });
+        self.record_range(range);
     }
 }
 
@@ -519,7 +550,8 @@ pub struct DiarizerHandle {
 impl DiarizerHandle {
     /// Spawn the diarizer thread. Uses sherpa-onnx when `models` is
     /// available and initialization succeeds; otherwise the fallback.
-    pub fn spawn(models: Option<ModelPaths>) -> Self {
+    /// `debug_log` enables the per-segment similarity trace.
+    pub fn spawn(models: Option<ModelPaths>, debug_log: Option<std::path::PathBuf>) -> Self {
         let ranges: Arc<Mutex<Vec<SpeakerRange>>> = Arc::new(Mutex::new(Vec::new()));
         let (tx, rx) = mpsc::channel::<DiarCmd>();
         let ranges_thread = ranges.clone();
@@ -549,6 +581,9 @@ impl DiarizerHandle {
                     )
                 }
             };
+            if let Some(path) = debug_log {
+                core.debug = std::fs::File::create(path).ok();
+            }
             while let Ok(cmd) = rx.recv() {
                 match cmd {
                     DiarCmd::Chunk(samples, t_ms) => core.push_chunk(&samples, t_ms),
@@ -740,7 +775,7 @@ mod tests {
 
     #[test]
     fn handle_runs_fallback_thread() {
-        let mut handle = DiarizerHandle::spawn(None);
+        let mut handle = DiarizerHandle::spawn(None, None);
         assert!(!handle.sherpa_active);
         let mut t = 0u64;
         for _ in 0..10 {

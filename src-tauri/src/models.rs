@@ -8,13 +8,16 @@ use crate::error::{Result, SallyError};
 use std::path::{Path, PathBuf};
 
 pub const VAD_FILE: &str = "silero_vad.onnx";
-pub const SPEAKER_FILE: &str = "speaker_embedding.onnx";
+// Versioned filename: changing the default model changes the name so
+// existing installs re-download instead of loading the old weights.
+pub const SPEAKER_FILE: &str = "speaker_camplus.onnx";
 
 const VAD_URL: &str =
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx";
-// 3D-Speaker ERes2Net base: solid cross-lingual speaker separation, ~26 MB.
-// (The upstream release tag really is spelled "recongition".)
-const SPEAKER_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx";
+// WeSpeaker CAM++ (VoxCeleb): stronger speaker separation than the previous
+// ERes2Net zh-cn model, ~28 MB. (The upstream release tag really is spelled
+// "recongition".)
+const SPEAKER_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/wespeaker_en_voxceleb_CAM%2B%2B.onnx";
 
 #[derive(Debug, Clone)]
 pub struct ModelPaths {
