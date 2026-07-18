@@ -35,8 +35,14 @@ pub struct PartialEntry {
     pub translated: String,
 }
 
+/// Two-stage assembly: `open` receives new original fragments; `closing` is
+/// an entry whose original text is frozen (speaker changed) but whose
+/// translation is still streaming in. Translated text lags the original by
+/// seconds, so routing it to the newest entry smeared each passage's
+/// translation into the following paragraph.
 pub struct Assembler {
     next_index: u64,
+    closing: Option<OpenEntry>,
     open: Option<OpenEntry>,
     /// Fraction of *speech-active* chunks with mic energy needed to
     /// attribute a turn to `You`. Measured against chunks where anyone was
@@ -58,6 +64,7 @@ impl Assembler {
     pub fn new() -> Self {
         Self {
             next_index: 0,
+            closing: None,
             open: None,
             mic_attribution_threshold: 0.5,
         }
@@ -80,10 +87,36 @@ impl Assembler {
         e.last_ms = e.last_ms.max(t_ms);
     }
 
+    /// Translation fragments belong to the oldest unfinished entry: the
+    /// model translates a passage seconds after transcribing it.
     pub fn push_translated(&mut self, text: &str, t_ms: u64) {
+        if let Some(e) = self.closing.as_mut() {
+            e.translated.push_str(text);
+            return;
+        }
         let e = self.open_mut(t_ms);
         e.translated.push_str(text);
         e.last_ms = e.last_ms.max(t_ms);
+    }
+
+    /// Original text accumulated in the currently open entry.
+    pub fn open_original_len(&self) -> usize {
+        self.open.as_ref().map(|e| e.original.chars().count()).unwrap_or(0)
+    }
+
+    /// Speaker changed: freeze the open entry's original and let its
+    /// translation finish streaming. Any previously closing entry is
+    /// finalized and returned.
+    pub fn split_for_speaker_change(
+        &mut self,
+        diarizer: Option<&dyn SpeakerLookup>,
+    ) -> Option<TimelineEntry> {
+        let finished = self
+            .closing
+            .take()
+            .and_then(|e| self.seal_entry(e, diarizer));
+        self.closing = self.open.take();
+        finished
     }
 
     /// Speech-activity signal from the pipeline, once per mixed chunk.
@@ -101,17 +134,28 @@ impl Assembler {
     }
 
     pub fn partial(&self) -> Option<PartialEntry> {
-        self.open.as_ref().map(|e| PartialEntry {
+        // Live view: the still-open original plus whichever translation is
+        // currently streaming (which may belong to the closing entry).
+        let e = self.open.as_ref().or(self.closing.as_ref())?;
+        let translated = self
+            .closing
+            .as_ref()
+            .map(|c| c.translated.clone())
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| e.translated.clone());
+        Some(PartialEntry {
             start_ms: e.start_ms,
             speaker: String::new(), // provisional: label assigned at finalize
-            original: e.original.clone(),
-            translated: e.translated.clone(),
+            original: self.open.as_ref().map(|o| o.original.clone()).unwrap_or_default(),
+            translated,
         })
     }
 
-    /// Finalize the open entry (turn complete, forced flush, or meeting end).
-    pub fn finalize_turn(&mut self, diarizer: Option<&dyn SpeakerLookup>) -> Option<TimelineEntry> {
-        let e = self.open.take()?;
+    fn seal_entry(
+        &mut self,
+        e: OpenEntry,
+        diarizer: Option<&dyn SpeakerLookup>,
+    ) -> Option<TimelineEntry> {
         if e.original.trim().is_empty() && e.translated.trim().is_empty() {
             return None;
         }
@@ -139,6 +183,23 @@ impl Assembler {
         };
         self.next_index += 1;
         Some(entry)
+    }
+
+    /// Finalize everything (turn complete, forced flush, or meeting end):
+    /// the closing entry first, then the open one, in timeline order.
+    pub fn finalize_turn(&mut self, diarizer: Option<&dyn SpeakerLookup>) -> Vec<TimelineEntry> {
+        let mut out = Vec::new();
+        if let Some(e) = self.closing.take() {
+            if let Some(entry) = self.seal_entry(e, diarizer) {
+                out.push(entry);
+            }
+        }
+        if let Some(e) = self.open.take() {
+            if let Some(entry) = self.seal_entry(e, diarizer) {
+                out.push(entry);
+            }
+        }
+        out
     }
 
     /// Explicit gap marker for an unrecoverable transcription interval
@@ -186,7 +247,7 @@ mod tests {
         a.push_original("world", 1400);
         a.push_translated("Xin chào ", 1200);
         a.push_translated("thế giới", 1600);
-        let e = a.finalize_turn(None).expect("entry");
+        let e = a.finalize_turn(None).pop().expect("entry");
         assert_eq!(e.original, "Hello world");
         assert_eq!(e.translated, "Xin chào thế giới");
         assert_eq!(e.start_ms, 1000);
@@ -201,8 +262,45 @@ mod tests {
         for _ in 0..10 {
             a.push_activity(true, false, 0);
         }
-        let e = a.finalize_turn(None).expect("entry");
+        let e = a.finalize_turn(None).pop().expect("entry");
         assert_eq!(e.speaker, "You");
+    }
+
+    #[test]
+    fn translation_routes_to_closing_entry_after_split() {
+        let mut a = Assembler::new();
+        a.push_original("first speaker words", 1000);
+        // Speaker changes before the translation arrives.
+        let done = a.split_for_speaker_change(None);
+        assert!(done.is_none(), "nothing was closing yet");
+        a.push_original("second speaker words", 3000);
+        // Late translation belongs to the first (closing) entry.
+        a.push_translated("bản dịch của người一", 3200);
+        let entries = a.finalize_turn(None);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].original, "first speaker words");
+        assert_eq!(entries[0].translated, "bản dịch của người一");
+        assert_eq!(entries[1].original, "second speaker words");
+        assert_eq!(entries[1].translated, "");
+    }
+
+    #[test]
+    fn second_split_finalizes_previous_closing() {
+        let mut a = Assembler::new();
+        a.push_original("one", 0);
+        assert!(a.split_for_speaker_change(None).is_none());
+        a.push_original("two", 1000);
+        a.push_translated("một", 1100);
+        let sealed = a.split_for_speaker_change(None).expect("first entry sealed");
+        assert_eq!(sealed.original, "one");
+        assert_eq!(sealed.translated, "một");
+        a.push_original("three", 2000);
+        let rest = a.finalize_turn(None);
+        assert_eq!(rest.len(), 2);
+        assert_eq!(rest[0].original, "two");
+        assert_eq!(rest[1].original, "three");
+        // Indices strictly increasing across all seals.
+        assert!(sealed.index < rest[0].index && rest[0].index < rest[1].index);
     }
 
     #[test]
@@ -216,7 +314,7 @@ mod tests {
         for _ in 0..30 {
             a.push_activity(false, false, 0);
         }
-        let e = a.finalize_turn(None).expect("entry");
+        let e = a.finalize_turn(None).pop().expect("entry");
         assert_eq!(e.speaker, "You");
     }
 
@@ -230,7 +328,7 @@ mod tests {
         for _ in 0..10 {
             a.push_activity(false, true, 0);
         }
-        let e = a.finalize_turn(None).expect("entry");
+        let e = a.finalize_turn(None).pop().expect("entry");
         assert_eq!(e.speaker, "Meeting");
     }
 
@@ -238,17 +336,17 @@ mod tests {
     fn empty_turn_produces_nothing() {
         let mut a = Assembler::new();
         a.push_original("   ", 0);
-        assert!(a.finalize_turn(None).is_none());
+        assert!(a.finalize_turn(None).is_empty());
     }
 
     #[test]
     fn indices_are_stable_and_increasing() {
         let mut a = Assembler::new();
         a.push_original("one", 0);
-        let e1 = a.finalize_turn(None).unwrap();
+        let e1 = a.finalize_turn(None).pop().unwrap();
         let g = a.gap(5000, 9000);
         a.push_original("two", 10_000);
-        let e2 = a.finalize_turn(None).unwrap();
+        let e2 = a.finalize_turn(None).pop().unwrap();
         assert_eq!((e1.index, g.index, e2.index), (0, 1, 2));
         assert_eq!(g.kind, EntryKind::Gap);
     }
