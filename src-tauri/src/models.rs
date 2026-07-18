@@ -10,14 +10,17 @@ use std::path::{Path, PathBuf};
 pub const VAD_FILE: &str = "silero_vad.onnx";
 // Versioned filename: changing the default model changes the name so
 // existing installs re-download instead of loading the old weights.
-pub const SPEAKER_FILE: &str = "speaker_camplus.onnx";
+pub const SPEAKER_FILE: &str = "speaker_titanet.onnx";
 
 const VAD_URL: &str =
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx";
-// WeSpeaker CAM++ (VoxCeleb): stronger speaker separation than the previous
-// ERes2Net zh-cn model, ~28 MB. (The upstream release tag really is spelled
-// "recongition".)
-const SPEAKER_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/wespeaker_en_voxceleb_CAM%2B%2B.onnx";
+// NeMo TitaNet-small, ~38 MB. Measured on known-speaker audio
+// (sr-data): same-speaker cosine 0.73, different-speaker 0.15–0.19 —
+// a wide margin around the 0.45 join threshold. CAM++ measured
+// 0.61 vs 0.36–0.47 (different speakers crossed the threshold, which
+// merged everyone into one cluster). (The upstream release tag really
+// is spelled "recongition".)
+const SPEAKER_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/nemo_en_titanet_small.onnx";
 
 #[derive(Debug, Clone)]
 pub struct ModelPaths {
