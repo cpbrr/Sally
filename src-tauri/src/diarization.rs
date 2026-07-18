@@ -26,13 +26,22 @@ const MIN_SEGMENT_MS: u64 = 400;
 const FB_SILENCE_CLOSE_MS: u64 = 600;
 const FB_SPEECH_RMS: f32 = 0.010;
 const FB_JOIN_SIMILARITY: f32 = 0.86;
+const FB_SEED_BELOW: f32 = 0.60;
 const FB_CONFIDENT_SIMILARITY: f32 = 0.55;
 
 // sherpa speaker-embedding tuning, calibrated against TitaNet-small on
 // known-speaker audio: same-speaker cosine ≈ 0.73, different-speaker
-// ≈ 0.15–0.19. The join threshold sits in the wide gap between the two.
+// ≈ 0.15–0.19. Join sits in the gap; seeding uses a stricter bar
+// (hysteresis) because noisy 2 s windows of the SAME voice can dip below
+// the join threshold — without the gap between the two, such windows
+// spawned phantom speakers until the cluster cap.
 const SHERPA_JOIN_SIMILARITY: f32 = 0.45;
+const SHERPA_SEED_BELOW: f32 = 0.32;
 const SHERPA_CONFIDENT_SIMILARITY: f32 = 0.20;
+/// A cluster this light that also holds under 5% of total speech is noise:
+/// dissolved on each pass, members reassigned or left uncertain.
+const MIN_CLUSTER_WEIGHT: f32 = 4.0;
+const MIN_CLUSTER_SHARE: f32 = 0.05;
 const MAX_CLUSTERS: usize = 8;
 /// Segments shorter than this yield unreliable embeddings and may never
 /// seed a new speaker (they can still join existing ones).
@@ -220,16 +229,20 @@ struct SegRec {
 /// heal as context accumulates instead of poisoning the meeting.
 pub struct GlobalClusterer {
     join_threshold: f32,
+    /// Seeding hysteresis: a new speaker is created only below this.
+    seed_below: f32,
     confident_threshold: f32,
-    /// Stable speaker centroids; index = speaker ID - 1. Never reordered,
-    /// never removed, so labels shown to the user stay meaningful.
+    /// Speaker centroids; index = speaker ID - 1. May be renumbered by a
+    /// merge/dissolve pass — safe because every pass relabels the entire
+    /// timeline.
     centroids: Vec<Vec<f32>>,
 }
 
 impl GlobalClusterer {
-    fn new(join_threshold: f32, confident_threshold: f32) -> Self {
+    fn new(join_threshold: f32, seed_below: f32, confident_threshold: f32) -> Self {
         Self {
             join_threshold,
+            seed_below,
             confident_threshold,
             centroids: Vec::new(),
         }
@@ -270,16 +283,23 @@ impl GlobalClusterer {
                         best = Some((ci, sim));
                     }
                 }
+                let best_sim = best.map(|(_, s)| s).unwrap_or(-1.0);
                 let assigned = match best {
                     Some((ci, sim)) if sim >= self.join_threshold => Some(ci),
-                    _ if seg.can_seed && working.len() < MAX_CLUSTERS => {
+                    // Hysteresis: seed a new speaker only when the segment is
+                    // clearly unlike every existing one. In-between segments
+                    // park on the nearest cluster (without moving it much —
+                    // their weight is what it is) and confidence gating
+                    // decides whether to trust the label.
+                    _ if seg.can_seed
+                        && best_sim < self.seed_below
+                        && working.len() < MAX_CLUSTERS =>
+                    {
                         working.push(seg.embedding.clone());
                         sums.push(vec![0.0; dims]);
                         weights.push(0.0);
                         Some(working.len() - 1)
                     }
-                    // Not joinable, can't seed: park on the nearest cluster;
-                    // confidence gating below decides whether to trust it.
                     Some((ci, _)) => Some(ci),
                     None => None,
                 };
@@ -304,35 +324,82 @@ impl GlobalClusterer {
             }
         }
 
-        // Merge any new centroid that converged onto an existing speaker.
-        let stable_len = self.centroids.len();
-        let mut remap: Vec<usize> = (0..working.len()).collect();
-        for ni in stable_len..working.len() {
-            let mut best: Option<(usize, f32)> = None;
-            for oi in 0..stable_len {
-                let sim = cosine(&working[ni], &working[oi]);
-                if best.map(|(_, s)| sim > s).unwrap_or(true) {
-                    best = Some((oi, sim));
-                }
-            }
-            if let Some((oi, sim)) = best {
-                if sim >= self.join_threshold {
-                    remap[ni] = oi;
-                }
+        // Cluster weights from the final assignment.
+        let mut totals: Vec<f32> = vec![0.0; working.len()];
+        for (si, a) in assignments.iter().enumerate() {
+            if let Some(ci) = a {
+                totals[*ci] += segments[si].weight;
             }
         }
-        // Compact: drop merged duplicates while preserving stable indices.
+
+        // Merge pass over ALL centroid pairs (not just new-vs-old): without
+        // it the cluster count only ever ratchets upward as near-duplicate
+        // speakers accumulate across passes.
+        let mut parent: Vec<usize> = (0..working.len()).collect();
+        let resolve = |parent: &Vec<usize>, mut i: usize| -> usize {
+            while parent[i] != i {
+                i = parent[i];
+            }
+            i
+        };
+        loop {
+            let mut best_pair: Option<(usize, usize, f32)> = None;
+            for i in 0..working.len() {
+                if resolve(&parent, i) != i {
+                    continue;
+                }
+                for j in (i + 1)..working.len() {
+                    if resolve(&parent, j) != j {
+                        continue;
+                    }
+                    let sim = cosine(&working[i], &working[j]);
+                    if sim >= self.join_threshold
+                        && best_pair.map(|(_, _, s)| sim > s).unwrap_or(true)
+                    {
+                        best_pair = Some((i, j, sim));
+                    }
+                }
+            }
+            let Some((i, j, _)) = best_pair else { break };
+            // Weighted merge of j into i.
+            let (wi, wj) = (totals[i].max(1e-3), totals[j].max(1e-3));
+            let merged: Vec<f32> = working[i]
+                .iter()
+                .zip(&working[j])
+                .map(|(a, b)| a * wi + b * wj)
+                .collect();
+            let mut merged = merged;
+            normalize(&mut merged);
+            working[i] = merged;
+            totals[i] += totals[j];
+            parent[j] = i;
+        }
+
+        // Dissolve noise clusters: too little speech in absolute terms AND
+        // a tiny share of the meeting. Their members fall back to the
+        // nearest surviving cluster or to uncertainty.
+        let grand: f32 = totals.iter().sum::<f32>().max(1e-3);
+        let mut dissolved: Vec<bool> = vec![false; working.len()];
+        for i in 0..working.len() {
+            if resolve(&parent, i) != i {
+                continue;
+            }
+            if totals[i] < MIN_CLUSTER_WEIGHT && totals[i] / grand < MIN_CLUSTER_SHARE {
+                dissolved[i] = true;
+            }
+        }
+        // Never dissolve everything.
+        if (0..working.len()).all(|i| resolve(&parent, i) != i || dissolved[i]) {
+            dissolved.iter_mut().for_each(|d| *d = false);
+        }
+
+        // Compact survivors into the new stable centroid list.
         let mut kept: Vec<Vec<f32>> = Vec::new();
-        let mut final_index: Vec<usize> = vec![0; working.len()];
-        for (wi, c) in working.iter().enumerate() {
-            if remap[wi] == wi {
-                final_index[wi] = kept.len();
-                kept.push(c.clone());
-            }
-        }
-        for wi in 0..working.len() {
-            if remap[wi] != wi {
-                final_index[wi] = final_index[remap[wi]];
+        let mut final_index: Vec<Option<usize>> = vec![None; working.len()];
+        for i in 0..working.len() {
+            if resolve(&parent, i) == i && !dissolved[i] {
+                final_index[i] = Some(kept.len());
+                kept.push(working[i].clone());
             }
         }
         self.centroids = kept;
@@ -340,17 +407,34 @@ impl GlobalClusterer {
         segments
             .iter()
             .zip(&assignments)
-            .map(|(seg, a)| match a {
-                Some(ci) => {
-                    let fi = final_index[*ci];
-                    let sim = cosine(&seg.embedding, &self.centroids[fi]);
-                    if sim >= self.confident_threshold {
-                        (SpeakerLabel::Speaker(fi as u32 + 1), sim)
-                    } else {
-                        (SpeakerLabel::Meeting, sim.max(0.0))
+            .map(|(seg, a)| {
+                let root = (*a).map(|ci| resolve(&parent, ci));
+                let fi = match root.and_then(|r| final_index[r]) {
+                    Some(fi) => Some(fi),
+                    // Dissolved/unassigned: nearest surviving cluster.
+                    None => {
+                        let mut best: Option<(usize, f32)> = None;
+                        for (ci, c) in self.centroids.iter().enumerate() {
+                            let sim = cosine(&seg.embedding, c);
+                            if best.map(|(_, s)| sim > s).unwrap_or(true) {
+                                best = Some((ci, sim));
+                            }
+                        }
+                        best.filter(|(_, s)| *s >= self.confident_threshold)
+                            .map(|(ci, _)| ci)
                     }
+                };
+                match fi {
+                    Some(fi) => {
+                        let sim = cosine(&seg.embedding, &self.centroids[fi]);
+                        if sim >= self.confident_threshold {
+                            (SpeakerLabel::Speaker(fi as u32 + 1), sim)
+                        } else {
+                            (SpeakerLabel::Meeting, sim.max(0.0))
+                        }
+                    }
+                    None => (SpeakerLabel::Meeting, 0.0),
                 }
-                None => (SpeakerLabel::Meeting, 0.0),
             })
             .collect()
     }
@@ -458,7 +542,11 @@ impl DiarizerCore {
                 extractor,
                 clock: SampleClock::new(),
             },
-            clusterer: GlobalClusterer::new(SHERPA_JOIN_SIMILARITY, SHERPA_CONFIDENT_SIMILARITY),
+            clusterer: GlobalClusterer::new(
+                SHERPA_JOIN_SIMILARITY,
+                SHERPA_SEED_BELOW,
+                SHERPA_CONFIDENT_SIMILARITY,
+            ),
             segments: Vec::new(),
             ranges,
             version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -479,7 +567,11 @@ impl DiarizerCore {
                 seg_start_ms: None,
                 seg_last_speech_ms: 0,
             },
-            clusterer: GlobalClusterer::new(FB_JOIN_SIMILARITY, FB_CONFIDENT_SIMILARITY),
+            clusterer: GlobalClusterer::new(
+                FB_JOIN_SIMILARITY,
+                FB_SEED_BELOW,
+                FB_CONFIDENT_SIMILARITY,
+            ),
             segments: Vec::new(),
             ranges,
             version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -538,9 +630,17 @@ impl DiarizerCore {
         if let Some(f) = self.debug.as_mut() {
             use std::io::Write;
             let speakers = self.clusterer.centroids.len();
+            // Similarity distribution: decisive for threshold tuning.
+            let mut sims: Vec<f32> = rebuilt.iter().map(|r| r.confidence).collect();
+            sims.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let (min, med, max) = (
+                sims.first().copied().unwrap_or(0.0),
+                sims.get(sims.len() / 2).copied().unwrap_or(0.0),
+                sims.last().copied().unwrap_or(0.0),
+            );
             let _ = writeln!(
                 f,
-                "recluster: {} segments -> {} speakers",
+                "recluster: {} segments -> {} speakers (sim min={min:.2} med={med:.2} max={max:.2})",
                 rebuilt.len(),
                 speakers
             );
