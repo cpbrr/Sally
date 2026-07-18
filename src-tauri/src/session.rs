@@ -91,9 +91,20 @@ pub fn start(
     let capture_handle = capture::start_capture(
         &config.mic_device,
         &config.system_device,
+        &config.capture_app,
         session_start,
         frame_tx,
     )?;
+    if !config.capture_app.is_empty() && !capture_handle.app_capture_active {
+        let _ = app.emit(
+            "sally://warning",
+            format!(
+                "'{}' has no active audio session — capturing the entire system instead. \
+                 Start audio in that app and restart the meeting to capture it alone.",
+                config.capture_app
+            ),
+        );
+    }
 
     let (control_tx, control_rx) = mpsc::channel::<Control>(8);
     let (done_tx, done_rx) = oneshot::channel::<Result<ReviewData>>();
@@ -412,8 +423,16 @@ async fn run_session(
                             let tail = gate.end_turn(&original);
                             play(&mut player, &mut readout_enabled, &tail);
                         }
-                        finalize_entry(&app, &mut assembler, &diarizer, &mut store,
-                                       &config, &mut speakers);
+                        // Rotate instead of sealing immediately: the entry
+                        // stays open one more turn so the diarizer can close
+                        // its speech segment (labels were coming back as
+                        // "Meeting" because the lookup ran too early) and
+                        // trailing translation fragments can land.
+                        if let Some(sealed) = assembler
+                            .split_for_speaker_change(Some(&diarizer as &dyn SpeakerLookup))
+                        {
+                            emit_sealed(&app, sealed, &mut store, &config, &mut speakers);
+                        }
                         last_fragment_ms = 0;
                     }
                     other => {

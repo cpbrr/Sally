@@ -31,6 +31,15 @@ const FB_CONFIDENT_SIMILARITY: f32 = 0.55;
 // sherpa speaker-embedding tuning (ERes2Net cosine scores).
 const SHERPA_JOIN_SIMILARITY: f32 = 0.55;
 const SHERPA_CONFIDENT_SIMILARITY: f32 = 0.30;
+/// A new cluster is created only when the best similarity is below this —
+/// anything between it and the join threshold is assigned to the nearest
+/// cluster without moving its centroid. Prevents noise from spawning
+/// endless "Speaker N" labels whose dominance then flips entry labels.
+const NEW_CLUSTER_BELOW: f32 = 0.40;
+const MAX_CLUSTERS: usize = 8;
+/// Segments shorter than this yield unreliable embeddings and may never
+/// create a new cluster (they can still join existing ones).
+const MIN_NEW_CLUSTER_MS: u64 = 800;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub enum SpeakerLabel {
@@ -204,7 +213,7 @@ impl ClusterEngine {
         }
     }
 
-    pub fn assign(&mut self, embedding: &[f32]) -> (SpeakerLabel, f32) {
+    pub fn assign(&mut self, embedding: &[f32], allow_new: bool) -> (SpeakerLabel, f32) {
         // Normalize so centroid averaging is not biased toward loud/long
         // segments (raw model embeddings are not unit-length).
         let mut embedding = embedding.to_vec();
@@ -217,6 +226,7 @@ impl ClusterEngine {
                 best = Some((i, sim));
             }
         }
+        let may_create = allow_new && self.clusters.len() < MAX_CLUSTERS;
         match best {
             Some((i, sim)) if sim >= self.join_threshold => {
                 let c = &mut self.clusters[i];
@@ -227,10 +237,20 @@ impl ClusterEngine {
                 c.count += 1;
                 (SpeakerLabel::Speaker(i as u32 + 1), sim)
             }
-            Some((_, sim)) if sim < self.confident_threshold && !self.clusters.is_empty() => {
-                (SpeakerLabel::Meeting, sim.max(0.0))
+            // Not similar enough to join, but not clearly a new voice
+            // either: assign the nearest cluster without polluting its
+            // centroid, or admit uncertainty.
+            Some((i, sim)) if sim >= NEW_CLUSTER_BELOW || !may_create => {
+                if sim >= self.confident_threshold {
+                    (SpeakerLabel::Speaker(i as u32 + 1), sim)
+                } else {
+                    (SpeakerLabel::Meeting, sim.max(0.0))
+                }
             }
-            _ => {
+            Some(_) | None => {
+                if !may_create {
+                    return (SpeakerLabel::Meeting, 0.0);
+                }
                 self.clusters.push(Cluster {
                     centroid: embedding.to_vec(),
                     count: 1,
@@ -407,7 +427,8 @@ impl DiarizerCore {
                     continue;
                 }
             };
-            let (label, confidence) = self.engine.assign(&embedding);
+            let allow_new = end_ms.saturating_sub(start_ms) >= MIN_NEW_CLUSTER_MS;
+            let (label, confidence) = self.engine.assign(&embedding, allow_new);
             self.ranges.lock().unwrap().push(SpeakerRange {
                 start_ms,
                 end_ms,
@@ -467,7 +488,8 @@ impl DiarizerCore {
             return;
         }
         let embedding = extractor.embed(&samples);
-        let (label, confidence) = self.engine.assign(&embedding);
+        let allow_new = end_ms.saturating_sub(start_ms) >= MIN_NEW_CLUSTER_MS;
+        let (label, confidence) = self.engine.assign(&embedding, allow_new);
         self.ranges.lock().unwrap().push(SpeakerRange {
             start_ms,
             end_ms,

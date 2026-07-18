@@ -19,6 +19,7 @@ export function Settings() {
   const { dict, config, setConfig, setUiLanguage, setShowSettings, phase } =
     useSally();
   const [devices, setDevices] = useState<AudioDevices>({ inputs: [], outputs: [] });
+  const [audioApps, setAudioApps] = useState<string[]>([]);
   const [apiKey, setApiKey] = useState("");
   const [showKey, setShowKey] = useState(false);
   const [form, setForm] = useState({
@@ -27,6 +28,7 @@ export function Settings() {
     data_dir: config?.data_dir ?? "",
     mic_device: config?.mic_device ?? "",
     system_device: config?.system_device ?? "",
+    capture_app: config?.capture_app ?? "",
     always_on_top: config?.always_on_top ?? false,
     readout_enabled: config?.readout_enabled ?? false,
     live_model: config?.live_model ?? "",
@@ -36,8 +38,13 @@ export function Settings() {
   const [translucent, setTranslucentState] = useState(isTranslucent());
   const [alpha, setAlpha] = useState(loadLevel());
 
+  const refreshApps = () => {
+    api.listAudioApps().then(setAudioApps).catch(() => {});
+  };
+
   useEffect(() => {
     api.listAudioDevices().then(setDevices).catch(() => {});
+    refreshApps();
     // Show the stored key so the box never looks empty after saving.
     api.getApiKey().then(setApiKey).catch(() => {});
   }, []);
@@ -172,6 +179,32 @@ export function Settings() {
             ))}
           </select>
         </label>
+
+        <label>
+          {dict.captureSource}
+          <div className="row">
+            <select
+              style={{ flex: 1 }}
+              value={form.capture_app}
+              onChange={(e) => setForm({ ...form, capture_app: e.target.value })}
+            >
+              <option value="">{dict.entireSystem}</option>
+              {/* Keep a saved app visible even when it is not running now. */}
+              {form.capture_app && !audioApps.includes(form.capture_app) && (
+                <option value={form.capture_app}>{form.capture_app}</option>
+              )}
+              {audioApps.map((a) => (
+                <option key={a} value={a}>
+                  {a}
+                </option>
+              ))}
+            </select>
+            <button className="btn compact" title={dict.refresh} onClick={refreshApps}>
+              ⟳
+            </button>
+          </div>
+        </label>
+        <p className="field-hint">{dict.captureSourceHint}</p>
 
         <label className="check">
           <input

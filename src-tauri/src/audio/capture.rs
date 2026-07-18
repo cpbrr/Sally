@@ -18,6 +18,9 @@ use tokio::sync::mpsc;
 pub struct CaptureHandle {
     stop: Arc<AtomicBool>,
     threads: Vec<std::thread::JoinHandle<()>>,
+    /// True when system audio comes from a single app (process loopback)
+    /// rather than the whole output device.
+    pub app_capture_active: bool,
 }
 
 impl CaptureHandle {
@@ -45,14 +48,18 @@ pub fn list_output_devices() -> Vec<String> {
 
 /// Start microphone and system-audio capture. Frames are pushed to `tx`
 /// with timestamps from `session_start` (monotonic clock, design §5).
+/// `capture_app` selects a single application (executable name) for system
+/// audio via process loopback on Windows; empty captures the whole device.
 pub fn start_capture(
     mic_device: &str,
     system_device: &str,
+    capture_app: &str,
     session_start: Instant,
     tx: mpsc::Sender<RawFrame>,
 ) -> Result<CaptureHandle> {
     let stop = Arc::new(AtomicBool::new(false));
     let mut threads = Vec::new();
+    let mut app_capture_active = false;
 
     threads.push(spawn_mic_thread(
         mic_device.to_string(),
@@ -60,14 +67,44 @@ pub fn start_capture(
         tx.clone(),
         stop.clone(),
     )?);
-    threads.push(spawn_system_thread(
-        system_device.to_string(),
-        session_start,
-        tx,
-        stop.clone(),
-    )?);
 
-    Ok(CaptureHandle { stop, threads })
+    #[cfg(windows)]
+    if !capture_app.is_empty() {
+        match super::app_capture::resolve_app_pid(capture_app) {
+            Some(pid) => {
+                threads.push(super::app_capture::spawn_app_capture(
+                    pid,
+                    session_start,
+                    tx.clone(),
+                    stop.clone(),
+                )?);
+                app_capture_active = true;
+            }
+            None => {
+                log::warn!(
+                    "selected capture app '{capture_app}' has no audio session; \
+                     falling back to whole-device loopback"
+                );
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = capture_app;
+
+    if !app_capture_active {
+        threads.push(spawn_system_thread(
+            system_device.to_string(),
+            session_start,
+            tx,
+            stop.clone(),
+        )?);
+    }
+
+    Ok(CaptureHandle {
+        stop,
+        threads,
+        app_capture_active,
+    })
 }
 
 fn find_input_device(host: &cpal::Host, name: &str) -> Option<cpal::Device> {
