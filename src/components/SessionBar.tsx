@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { IconDoc } from "./Icons";
 import { useSally } from "../store";
 
 function formatElapsed(ms: number): string {
@@ -23,7 +24,6 @@ export function SessionBar() {
     config,
     status,
     statusDetail,
-    review,
     meetingEndedAt,
     warning,
     setPhase,
@@ -97,12 +97,11 @@ export function SessionBar() {
   };
 
   const openProcessing = async () => {
-    // Refresh from the core in case the app state was reset.
+    // Refresh from the core in case the app state was reset; the screen
+    // itself lists past meetings, so it opens either way.
     const last = await api.getLastMeeting().catch(() => null);
-    if (last) {
-      setReview(last);
-      setPhase("processing");
-    }
+    if (last) setReview(last);
+    setPhase("processing");
   };
 
   return (
@@ -114,15 +113,13 @@ export function SessionBar() {
             <button className="btn primary" onClick={start} disabled={busy}>
               {dict.start}
             </button>
-            {review && (
-              <button
-                className="btn"
-                title={dict.processLastMeeting}
-                onClick={openProcessing}
-              >
-                📄
-              </button>
-            )}
+            <button
+              className="btn"
+              title={dict.processLastMeeting}
+              onClick={openProcessing}
+            >
+              <IconDoc />
+            </button>
           </>
         ) : (
           <>

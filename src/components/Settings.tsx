@@ -14,6 +14,7 @@ import {
   setLevel,
   setTranslucent,
 } from "../transparency";
+import { IconChevron, IconEye, IconEyeOff, IconRefresh, IconReset } from "./Icons";
 
 export function Settings() {
   const { dict, config, setConfig, setUiLanguage, setShowSettings, phase } =
@@ -22,6 +23,7 @@ export function Settings() {
   const [audioApps, setAudioApps] = useState<string[]>([]);
   const [apiKey, setApiKey] = useState("");
   const [showKey, setShowKey] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [form, setForm] = useState({
     ui_language: config?.ui_language ?? "en",
     target_language: config?.target_language ?? "Vietnamese",
@@ -29,8 +31,6 @@ export function Settings() {
     mic_device: config?.mic_device ?? "",
     system_device: config?.system_device ?? "",
     capture_app: config?.capture_app ?? "",
-    always_on_top: config?.always_on_top ?? false,
-    readout_enabled: config?.readout_enabled ?? false,
     live_model: config?.live_model ?? "",
     cleanup_model: config?.cleanup_model ?? "",
   });
@@ -81,6 +81,7 @@ export function Settings() {
   const toggleTranslucent = (on: boolean) => {
     setTranslucentState(on);
     setTranslucent(on);
+    if (on) setAlpha(loadLevel());
   };
 
   const changeAlpha = (v: number) => {
@@ -94,61 +95,29 @@ export function Settings() {
         <h2>{dict.settingsTitle}</h2>
 
         <label>
-          {dict.setupLanguage}
-          <select
-            value={form.ui_language}
-            onChange={(e) => setForm({ ...form, ui_language: e.target.value })}
-          >
-            <option value="en">English</option>
-            <option value="vi">Tiếng Việt</option>
-          </select>
-        </label>
-
-        <label>
-          {dict.targetLanguage}
-          <select
-            value={form.target_language}
-            disabled={phase === "live"}
-            onChange={(e) =>
-              setForm({ ...form, target_language: e.target.value })
-            }
-          >
-            {TARGET_LANGUAGES.map((l) => (
-              <option key={l} value={l}>
-                {l}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label>
-          {dict.setupApiKey}
+          {dict.captureSource}
           <div className="row">
-            <input
-              type={showKey ? "text" : "password"}
+            <select
               style={{ flex: 1 }}
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-            />
-            <button
-              className="btn compact"
-              title={showKey ? "Hide" : "Show"}
-              onClick={() => setShowKey(!showKey)}
+              value={form.capture_app}
+              onChange={(e) => setForm({ ...form, capture_app: e.target.value })}
             >
-              {showKey ? "🙈" : "👁"}
+              <option value="">{dict.entireSystem}</option>
+              {form.capture_app && !audioApps.includes(form.capture_app) && (
+                <option value={form.capture_app}>{form.capture_app}</option>
+              )}
+              {audioApps.map((a) => (
+                <option key={a} value={a}>
+                  {a}
+                </option>
+              ))}
+            </select>
+            <button className="btn compact" title={dict.refresh} onClick={refreshApps}>
+              <IconRefresh />
             </button>
           </div>
         </label>
-
-        <label>
-          {dict.setupDataFolder}
-          <div className="row">
-            <input type="text" value={form.data_dir} readOnly style={{ flex: 1 }} />
-            <button className="btn" onClick={pickFolder} disabled={phase === "live"}>
-              {dict.chooseFolder}
-            </button>
-          </div>
-        </label>
+        <p className="field-hint">{dict.captureSourceHint}</p>
 
         <label>
           {dict.micDevice}
@@ -181,51 +150,14 @@ export function Settings() {
         </label>
 
         <label>
-          {dict.captureSource}
+          {dict.setupDataFolder}
           <div className="row">
-            <select
-              style={{ flex: 1 }}
-              value={form.capture_app}
-              onChange={(e) => setForm({ ...form, capture_app: e.target.value })}
-            >
-              <option value="">{dict.entireSystem}</option>
-              {/* Keep a saved app visible even when it is not running now. */}
-              {form.capture_app && !audioApps.includes(form.capture_app) && (
-                <option value={form.capture_app}>{form.capture_app}</option>
-              )}
-              {audioApps.map((a) => (
-                <option key={a} value={a}>
-                  {a}
-                </option>
-              ))}
-            </select>
-            <button className="btn compact" title={dict.refresh} onClick={refreshApps}>
-              ⟳
+            <input type="text" value={form.data_dir} readOnly style={{ flex: 1 }} />
+            <button className="btn" onClick={pickFolder} disabled={phase === "live"}>
+              {dict.chooseFolder}
             </button>
           </div>
         </label>
-        <p className="field-hint">{dict.captureSourceHint}</p>
-
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={form.always_on_top}
-            onChange={(e) => setForm({ ...form, always_on_top: e.target.checked })}
-          />
-          {dict.alwaysOnTopDefault}
-        </label>
-
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={form.readout_enabled}
-            onChange={(e) =>
-              setForm({ ...form, readout_enabled: e.target.checked })
-            }
-          />
-          {dict.readoutSetting}
-        </label>
-        <p className="field-hint">{dict.readoutHint}</p>
 
         <label className="check">
           <input
@@ -248,45 +180,105 @@ export function Settings() {
           </label>
         )}
 
-        <label>
-          {dict.liveModel}
-          <div className="row">
-            <input
-              type="text"
-              style={{ flex: 1 }}
-              value={form.live_model}
-              onChange={(e) => setForm({ ...form, live_model: e.target.value })}
-            />
-            <button
-              className="btn compact"
-              title={dict.revertDefault}
-              onClick={() => setForm({ ...form, live_model: DEFAULT_LIVE_MODEL })}
-            >
-              ↺
-            </button>
-          </div>
-        </label>
+        <button
+          className="btn advanced-toggle"
+          onClick={() => setShowAdvanced(!showAdvanced)}
+        >
+          <IconChevron open={showAdvanced} /> {dict.advanced}
+        </button>
 
-        <label>
-          {dict.cleanupModel}
-          <div className="row">
-            <input
-              type="text"
-              style={{ flex: 1 }}
-              value={form.cleanup_model}
-              onChange={(e) => setForm({ ...form, cleanup_model: e.target.value })}
-            />
-            <button
-              className="btn compact"
-              title={dict.revertDefault}
-              onClick={() =>
-                setForm({ ...form, cleanup_model: DEFAULT_CLEANUP_MODEL })
-              }
-            >
-              ↺
-            </button>
-          </div>
-        </label>
+        {showAdvanced && (
+          <>
+            <label>
+              {dict.setupApiKey}
+              <div className="row">
+                <input
+                  type={showKey ? "text" : "password"}
+                  style={{ flex: 1 }}
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                />
+                <button
+                  className="btn compact"
+                  title={showKey ? "Hide" : "Show"}
+                  onClick={() => setShowKey(!showKey)}
+                >
+                  {showKey ? <IconEyeOff /> : <IconEye />}
+                </button>
+              </div>
+            </label>
+
+            <label>
+              {dict.setupLanguage}
+              <select
+                value={form.ui_language}
+                onChange={(e) => setForm({ ...form, ui_language: e.target.value })}
+              >
+                <option value="en">English</option>
+                <option value="vi">Tiếng Việt</option>
+              </select>
+            </label>
+
+            <label>
+              {dict.targetLanguage}
+              <select
+                value={form.target_language}
+                disabled={phase === "live"}
+                onChange={(e) =>
+                  setForm({ ...form, target_language: e.target.value })
+                }
+              >
+                {TARGET_LANGUAGES.map((l) => (
+                  <option key={l} value={l}>
+                    {l}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label>
+              {dict.liveModel}
+              <div className="row">
+                <input
+                  type="text"
+                  style={{ flex: 1 }}
+                  value={form.live_model}
+                  onChange={(e) => setForm({ ...form, live_model: e.target.value })}
+                />
+                <button
+                  className="btn compact"
+                  title={dict.revertDefault}
+                  onClick={() => setForm({ ...form, live_model: DEFAULT_LIVE_MODEL })}
+                >
+                  <IconReset />
+                </button>
+              </div>
+            </label>
+
+            <label>
+              {dict.cleanupModel}
+              <div className="row">
+                <input
+                  type="text"
+                  style={{ flex: 1 }}
+                  value={form.cleanup_model}
+                  onChange={(e) =>
+                    setForm({ ...form, cleanup_model: e.target.value })
+                  }
+                />
+                <button
+                  className="btn compact"
+                  title={dict.revertDefault}
+                  onClick={() =>
+                    setForm({ ...form, cleanup_model: DEFAULT_CLEANUP_MODEL })
+                  }
+                >
+                  <IconReset />
+                </button>
+              </div>
+            </label>
+          </>
+        )}
 
         {error && <p className="error-text">{error}</p>}
 

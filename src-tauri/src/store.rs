@@ -86,6 +86,60 @@ impl MeetingStore {
         })
     }
 
+    /// Attach to an existing raw meeting file for (re-)processing past
+    /// meetings. No files are created or modified by attaching.
+    pub fn attach(meetings_dir: PathBuf, recovery_dir: PathBuf, raw_path: PathBuf) -> Result<Self> {
+        if !raw_path.exists() {
+            return Err(SallyError::Storage("meeting file not found".into()));
+        }
+        let stem = raw_path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if stem.is_empty() || stem.ends_with("-no-timestamps") {
+            return Err(SallyError::Storage("not a raw meeting file".into()));
+        }
+        // DD-MM-YYYY_HH.MM prefix; older files keep whatever they have.
+        let prefix: String = stem.chars().take(16).collect();
+        let title = std::fs::read_to_string(&raw_path)
+            .ok()
+            .and_then(|t| t.lines().next().map(|l| l.trim_start_matches('#').trim().to_string()))
+            .unwrap_or_else(|| "Untitled meeting".into());
+        Ok(Self {
+            raw_dir: meetings_dir.join("raw"),
+            polished_dir: meetings_dir.join("polished"),
+            recovery_dir,
+            raw_path,
+            prefix,
+            stem,
+            meta: MeetingMeta {
+                title,
+                started_at: String::new(),
+                target_language: String::new(),
+            },
+        })
+    }
+
+    /// Speaker labels present in a raw transcript (for the rename list when
+    /// reopening a past meeting).
+    pub fn extract_speakers(raw_text: &str) -> Vec<String> {
+        let mut speakers: Vec<String> = Vec::new();
+        for line in raw_text.lines() {
+            if !line.starts_with('[') {
+                continue;
+            }
+            let Some(open) = line.find("**") else { continue };
+            let rest = &line[open + 2..];
+            let Some(close) = rest.find("**") else { continue };
+            let name = rest[..close].trim();
+            if !name.is_empty() && !speakers.iter().any(|s| s == name) {
+                speakers.push(name.to_string());
+            }
+        }
+        speakers.sort();
+        speakers
+    }
+
     pub fn raw_path(&self) -> &Path {
         &self.raw_path
     }

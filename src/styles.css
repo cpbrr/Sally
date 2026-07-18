@@ -288,7 +288,26 @@ input[type="range"] {
   padding: 3px 8px;
   font-size: 11px;
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
 }
+
+.icon-btn,
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+.advanced-toggle {
+  justify-content: flex-start;
+  color: var(--text-dim);
+  background: none;
+  border: none;
+  padding: 4px 0;
+}
+.advanced-toggle:hover { color: var(--text); border: none; }
 
 .sheet {
   /* Sheets and popups stay fully opaque — the transparency slider applies

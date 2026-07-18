@@ -184,7 +184,10 @@ async fn run_session(
     let mut assembler = Assembler::new();
     // Diarization is always on; sherpa-onnx when models are present,
     // otherwise the built-in fallback (offline first run).
-    let mut diarizer = DiarizerHandle::spawn(models);
+    let mut diarizer = DiarizerHandle::spawn(
+        models,
+        Some(config.data_dir.join("diar-debug.log")),
+    );
     if !diarizer.sherpa_active {
         log::warn!("diarization running on the fallback backend (models unavailable)");
         let _ = app.emit(

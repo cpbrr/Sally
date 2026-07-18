@@ -70,10 +70,13 @@ const en = {
   reviewSpeakersHint:
     "Rename speakers, or give two labels the same name to merge them.",
   includeTimestamps: "Include timestamps",
+  includeTimestampsHint:
+    "Applies to everything this run produces. Untick to also write a timestamp-free copy of the raw transcript. Run twice for both versions.",
   aiCleanup: "AI clean & summarize",
   aiCleanupHint:
     "Sends the transcript text to Gemini and writes a polished summary file.",
-  exportNoTimestamps: "Also export a timestamp-free copy",
+  meetingPick: "Meeting",
+  advanced: "Advanced",
   runProcessing: "Process",
   processingRunning: "Processing…",
   processingSuccess: "Done! Files are ready.",
@@ -179,10 +182,13 @@ const vi: typeof en = {
   reviewSpeakersHint:
     "Đổi tên người nói, hoặc đặt hai nhãn trùng tên để gộp lại.",
   includeTimestamps: "Kèm dấu thời gian",
+  includeTimestampsHint:
+    "Áp dụng cho mọi tệp tạo ra trong lần chạy này. Bỏ chọn để tạo thêm bản sao không dấu thời gian của bản ghi thô. Chạy hai lần nếu muốn cả hai phiên bản.",
   aiCleanup: "AI dọn & tóm tắt",
   aiCleanupHint:
     "Gửi văn bản bản ghi đến Gemini và tạo tệp tóm tắt đã chỉnh sửa.",
-  exportNoTimestamps: "Xuất thêm bản sao không dấu thời gian",
+  meetingPick: "Cuộc họp",
+  advanced: "Nâng cao",
   runProcessing: "Xử lý",
   processingRunning: "Đang xử lý…",
   processingSuccess: "Xong! Tệp đã sẵn sàng.",

@@ -65,6 +65,11 @@ export interface StatusPayload {
   detail: string;
 }
 
+export interface MeetingFile {
+  name: string;
+  path: string;
+}
+
 export interface ReviewInfo {
   raw_path: string;
   raw_dir: string;
@@ -88,6 +93,9 @@ export const api = {
   resumeMeeting: () => invoke<void>("resume_meeting"),
   endMeeting: () => invoke<ReviewInfo>("end_meeting"),
   getLastMeeting: () => invoke<ReviewInfo | null>("get_last_meeting"),
+  listMeetings: () => invoke<MeetingFile[]>("list_meetings"),
+  openMeeting: (rawPath: string) =>
+    invoke<ReviewInfo>("open_meeting", { rawPath }),
   applyReview: (renames: Record<string, string>, meetingTitle?: string) =>
     invoke<ReviewInfo>("apply_review", {
       renames,

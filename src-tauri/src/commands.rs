@@ -356,6 +356,66 @@ pub async fn get_last_meeting(state: State<'_, AppState>) -> Result<Option<Revie
     Ok(state.last_meeting.lock().await.as_ref().map(review_info))
 }
 
+#[derive(Serialize)]
+pub struct MeetingFile {
+    pub name: String,
+    pub path: String,
+}
+
+/// Raw meeting transcripts available for processing, newest first.
+#[tauri::command]
+pub async fn list_meetings(state: State<'_, AppState>) -> Result<Vec<MeetingFile>> {
+    let cfg = require_config(&state).await?;
+    let raw_dir = cfg.meetings_dir().join("raw");
+    let Ok(entries) = std::fs::read_dir(&raw_dir) else {
+        return Ok(Vec::new());
+    };
+    let mut files: Vec<(std::time::SystemTime, MeetingFile)> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            name.ends_with(".md") && !name.ends_with("-no-timestamps.md")
+        })
+        .map(|e| {
+            let modified = e
+                .metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            let path = e.path();
+            let name = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            (
+                modified,
+                MeetingFile {
+                    name,
+                    path: path.to_string_lossy().into_owned(),
+                },
+            )
+        })
+        .collect();
+    files.sort_by(|a, b| b.0.cmp(&a.0));
+    Ok(files.into_iter().map(|(_, f)| f).collect())
+}
+
+/// Open a past meeting's raw transcript for processing.
+#[tauri::command]
+pub async fn open_meeting(state: State<'_, AppState>, raw_path: String) -> Result<ReviewInfo> {
+    let cfg = require_config(&state).await?;
+    let store = MeetingStore::attach(
+        cfg.meetings_dir(),
+        cfg.recovery_dir(),
+        PathBuf::from(&raw_path),
+    )?;
+    let text = std::fs::read_to_string(store.raw_path())?;
+    let speakers = MeetingStore::extract_speakers(&text);
+    let review = ReviewData { store, speakers };
+    let info = review_info(&review);
+    *state.last_meeting.lock().await = Some(review);
+    Ok(info)
+}
+
 /// Apply review actions: global speaker rename/merge and optional meeting
 /// rename (design §6.4, §8).
 #[tauri::command]

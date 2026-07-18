@@ -1,6 +1,15 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import {
+  IconClose,
+  IconGear,
+  IconMinus,
+  IconPin,
+  IconPinOff,
+  IconSpeakerOff,
+  IconSpeakerOn,
+} from "./Icons";
 import { useSally } from "../store";
 
 const STATUS_KEYS: Record<string, string> = {
@@ -60,35 +69,35 @@ export function TitleBar() {
         title={config?.readout_enabled ? dict.readoutOff : dict.readoutOn}
         onClick={toggleReadout}
       >
-        {config?.readout_enabled ? "🔊" : "🔈"}
+        {config?.readout_enabled ? <IconSpeakerOn /> : <IconSpeakerOff />}
       </button>
       <button
         className={`icon-btn ${pinned ? "active" : ""}`}
         title={pinned ? dict.unpin : dict.pin}
         onClick={togglePin}
       >
-        {pinned ? "📌" : "📍"}
+        {pinned ? <IconPin /> : <IconPinOff />}
       </button>
       <button
         className={`icon-btn ${showSettings ? "active" : ""}`}
         title={dict.settings}
         onClick={() => setShowSettings(!showSettings)}
       >
-        ⚙
+        <IconGear />
       </button>
       <button
         className="icon-btn"
         title="Minimize"
         onClick={() => getCurrentWindow().minimize()}
       >
-        —
+        <IconMinus />
       </button>
       <button
         className="icon-btn"
         title="Close"
         onClick={() => getCurrentWindow().close()}
       >
-        ✕
+        <IconClose />
       </button>
     </div>
   );
