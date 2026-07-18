@@ -32,15 +32,15 @@ const FB_CONFIDENT_SIMILARITY: f32 = 0.55;
 // speaker typically 0.5–0.8, different speakers 0.05–0.3).
 const SHERPA_JOIN_SIMILARITY: f32 = 0.45;
 const SHERPA_CONFIDENT_SIMILARITY: f32 = 0.25;
-/// A new cluster is created only when the best similarity is below this —
-/// anything between it and the join threshold is assigned to the nearest
-/// cluster without moving its centroid. Prevents noise from spawning
-/// endless "Speaker N" labels whose dominance then flips entry labels.
-const NEW_CLUSTER_BELOW: f32 = 0.35;
 const MAX_CLUSTERS: usize = 8;
 /// Segments shorter than this yield unreliable embeddings and may never
-/// create a new cluster (they can still join existing ones).
+/// seed a new speaker (they can still join existing ones).
 const MIN_NEW_CLUSTER_MS: u64 = 800;
+/// Re-cluster after this many new segments or this much audio time.
+const RECLUSTER_EVERY_SEGMENTS: usize = 5;
+const RECLUSTER_EVERY_MS: u64 = 10_000;
+/// Bound the retained segment set (a 4 h meeting stays well under this).
+const MAX_SEGMENTS: usize = 6_000;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub enum SpeakerLabel {
@@ -193,72 +193,158 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
-struct Cluster {
-    centroid: Vec<f32>,
-    count: u32,
+/// One diarized speech segment retained for the life of the meeting.
+/// 256 floats each — hours of audio stay in the kilobyte range.
+struct SegRec {
+    start_ms: u64,
+    end_ms: u64,
+    /// Unit-normalized voice embedding.
+    embedding: Vec<f32>,
+    /// Clustering weight (speech seconds, discounted for short segments).
+    weight: f32,
+    /// Long enough to seed a brand-new speaker.
+    can_seed: bool,
 }
 
-/// Online centroid clustering with per-backend thresholds.
-pub struct ClusterEngine {
-    clusters: Vec<Cluster>,
+/// Deferred-commitment clustering: every pass re-clusters *all* segments
+/// globally, warm-started from the stable speaker centroids so speaker IDs
+/// never flap. Past assignments are recomputed each pass — early mistakes
+/// heal as context accumulates instead of poisoning the meeting.
+pub struct GlobalClusterer {
     join_threshold: f32,
     confident_threshold: f32,
+    /// Stable speaker centroids; index = speaker ID - 1. Never reordered,
+    /// never removed, so labels shown to the user stay meaningful.
+    centroids: Vec<Vec<f32>>,
 }
 
-impl ClusterEngine {
-    pub fn new(join_threshold: f32, confident_threshold: f32) -> Self {
+impl GlobalClusterer {
+    fn new(join_threshold: f32, confident_threshold: f32) -> Self {
         Self {
-            clusters: Vec::new(),
             join_threshold,
             confident_threshold,
+            centroids: Vec::new(),
         }
     }
 
-    pub fn assign(&mut self, embedding: &[f32], allow_new: bool) -> (SpeakerLabel, f32) {
-        // Normalize so centroid averaging is not biased toward loud/long
-        // segments (raw model embeddings are not unit-length).
-        let mut embedding = embedding.to_vec();
-        normalize(&mut embedding);
-        let embedding = &embedding[..];
-        let mut best: Option<(usize, f32)> = None;
-        for (i, c) in self.clusters.iter().enumerate() {
-            let sim = cosine(embedding, &c.centroid);
-            if best.map(|(_, s)| sim > s).unwrap_or(true) {
-                best = Some((i, sim));
+    /// Global re-cluster. Returns one (label, confidence) per segment,
+    /// in segment order.
+    fn recluster(&mut self, segments: &[SegRec]) -> Vec<(SpeakerLabel, f32)> {
+        if segments.is_empty() {
+            return Vec::new();
+        }
+        // Warm start: k-means-style iterations seeded with the stable
+        // centroids. Index identity is preserved across passes, which is
+        // what keeps "Speaker 2" pointing at the same person all meeting.
+        let mut working: Vec<Vec<f32>> = self.centroids.clone();
+        let mut assignments: Vec<Option<usize>> = vec![None; segments.len()];
+
+        // Heaviest segments first so new speakers are seeded from the most
+        // reliable evidence.
+        let mut order: Vec<usize> = (0..segments.len()).collect();
+        order.sort_by(|&a, &b| {
+            segments[b]
+                .weight
+                .partial_cmp(&segments[a].weight)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        for _iter in 0..4 {
+            let dims = segments[0].embedding.len();
+            let mut sums: Vec<Vec<f32>> = vec![vec![0.0; dims]; working.len()];
+            let mut weights: Vec<f32> = vec![0.0; working.len()];
+            for &si in &order {
+                let seg = &segments[si];
+                let mut best: Option<(usize, f32)> = None;
+                for (ci, c) in working.iter().enumerate() {
+                    let sim = cosine(&seg.embedding, c);
+                    if best.map(|(_, s)| sim > s).unwrap_or(true) {
+                        best = Some((ci, sim));
+                    }
+                }
+                let assigned = match best {
+                    Some((ci, sim)) if sim >= self.join_threshold => Some(ci),
+                    _ if seg.can_seed && working.len() < MAX_CLUSTERS => {
+                        working.push(seg.embedding.clone());
+                        sums.push(vec![0.0; dims]);
+                        weights.push(0.0);
+                        Some(working.len() - 1)
+                    }
+                    // Not joinable, can't seed: park on the nearest cluster;
+                    // confidence gating below decides whether to trust it.
+                    Some((ci, _)) => Some(ci),
+                    None => None,
+                };
+                assignments[si] = assigned;
+                if let Some(ci) = assigned {
+                    for (s, e) in sums[ci].iter_mut().zip(&seg.embedding) {
+                        *s += e * seg.weight;
+                    }
+                    weights[ci] += seg.weight;
+                }
+            }
+            // Update centroids; clusters with no evidence keep their old
+            // centroid (a silent speaker must not be forgotten).
+            for (ci, c) in working.iter_mut().enumerate() {
+                if weights[ci] > 0.0 {
+                    let mut nc = sums[ci].clone();
+                    normalize(&mut nc);
+                    if nc.iter().any(|v| *v != 0.0) {
+                        *c = nc;
+                    }
+                }
             }
         }
-        let may_create = allow_new && self.clusters.len() < MAX_CLUSTERS;
-        match best {
-            Some((i, sim)) if sim >= self.join_threshold => {
-                let c = &mut self.clusters[i];
-                let n = c.count as f32;
-                for (cx, ex) in c.centroid.iter_mut().zip(embedding) {
-                    *cx = (*cx * n + ex) / (n + 1.0);
-                }
-                c.count += 1;
-                (SpeakerLabel::Speaker(i as u32 + 1), sim)
-            }
-            // Not similar enough to join, but not clearly a new voice
-            // either: assign the nearest cluster without polluting its
-            // centroid, or admit uncertainty.
-            Some((i, sim)) if sim >= NEW_CLUSTER_BELOW || !may_create => {
-                if sim >= self.confident_threshold {
-                    (SpeakerLabel::Speaker(i as u32 + 1), sim)
-                } else {
-                    (SpeakerLabel::Meeting, sim.max(0.0))
+
+        // Merge any new centroid that converged onto an existing speaker.
+        let stable_len = self.centroids.len();
+        let mut remap: Vec<usize> = (0..working.len()).collect();
+        for ni in stable_len..working.len() {
+            let mut best: Option<(usize, f32)> = None;
+            for oi in 0..stable_len {
+                let sim = cosine(&working[ni], &working[oi]);
+                if best.map(|(_, s)| sim > s).unwrap_or(true) {
+                    best = Some((oi, sim));
                 }
             }
-            Some(_) | None => {
-                if !may_create {
-                    return (SpeakerLabel::Meeting, 0.0);
+            if let Some((oi, sim)) = best {
+                if sim >= self.join_threshold {
+                    remap[ni] = oi;
                 }
-                self.clusters.push(Cluster {
-                    centroid: embedding.to_vec(),
-                    count: 1,
-                });
-                (SpeakerLabel::Speaker(self.clusters.len() as u32), 1.0)
             }
         }
+        // Compact: drop merged duplicates while preserving stable indices.
+        let mut kept: Vec<Vec<f32>> = Vec::new();
+        let mut final_index: Vec<usize> = vec![0; working.len()];
+        for (wi, c) in working.iter().enumerate() {
+            if remap[wi] == wi {
+                final_index[wi] = kept.len();
+                kept.push(c.clone());
+            }
+        }
+        for wi in 0..working.len() {
+            if remap[wi] != wi {
+                final_index[wi] = final_index[remap[wi]];
+            }
+        }
+        self.centroids = kept;
+
+        segments
+            .iter()
+            .zip(&assignments)
+            .map(|(seg, a)| match a {
+                Some(ci) => {
+                    let fi = final_index[*ci];
+                    let sim = cosine(&seg.embedding, &self.centroids[fi]);
+                    if sim >= self.confident_threshold {
+                        (SpeakerLabel::Speaker(fi as u32 + 1), sim)
+                    } else {
+                        (SpeakerLabel::Meeting, sim.max(0.0))
+                    }
+                }
+                None => (SpeakerLabel::Meeting, 0.0),
+            })
+            .collect()
     }
 }
 
@@ -321,8 +407,14 @@ enum Backend {
 
 pub struct DiarizerCore {
     backend: Backend,
-    engine: ClusterEngine,
+    clusterer: GlobalClusterer,
+    segments: Vec<SegRec>,
     ranges: Arc<Mutex<Vec<SpeakerRange>>>,
+    /// Bumped after every re-cluster; the session refreshes past transcript
+    /// labels when it changes.
+    version: Arc<std::sync::atomic::AtomicU64>,
+    segments_since_recluster: usize,
+    last_recluster_audio_ms: u64,
     /// Optional per-meeting trace (`diar-debug.log` in the data folder):
     /// one line per segment with the similarity score, for tuning. Never
     /// contains audio or transcript text.
@@ -358,8 +450,12 @@ impl DiarizerCore {
                 extractor,
                 clock: SampleClock::new(),
             },
-            engine: ClusterEngine::new(SHERPA_JOIN_SIMILARITY, SHERPA_CONFIDENT_SIMILARITY),
+            clusterer: GlobalClusterer::new(SHERPA_JOIN_SIMILARITY, SHERPA_CONFIDENT_SIMILARITY),
+            segments: Vec::new(),
             ranges,
+            version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            segments_since_recluster: 0,
+            last_recluster_audio_ms: 0,
             debug: None,
         })
     }
@@ -375,25 +471,75 @@ impl DiarizerCore {
                 seg_start_ms: None,
                 seg_last_speech_ms: 0,
             },
-            engine: ClusterEngine::new(FB_JOIN_SIMILARITY, FB_CONFIDENT_SIMILARITY),
+            clusterer: GlobalClusterer::new(FB_JOIN_SIMILARITY, FB_CONFIDENT_SIMILARITY),
+            segments: Vec::new(),
             ranges,
+            version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            segments_since_recluster: 0,
+            last_recluster_audio_ms: 0,
             debug: None,
         }
     }
 
-    fn record_range(&mut self, range: SpeakerRange) {
+    /// Add one diarized segment and re-cluster when due. Deferred
+    /// commitment: labels for *all* segments are recomputed, so early
+    /// assignments heal as more of each voice is heard.
+    fn add_segment(&mut self, start_ms: u64, end_ms: u64, embedding: Vec<f32>) {
+        let dur_ms = end_ms.saturating_sub(start_ms);
+        let mut embedding = embedding;
+        normalize(&mut embedding);
+        let can_seed = dur_ms >= MIN_NEW_CLUSTER_MS;
+        let weight = (dur_ms as f32 / 1000.0).min(10.0) * if can_seed { 1.0 } else { 0.25 };
         if let Some(f) = self.debug.as_mut() {
             use std::io::Write;
+            let _ = writeln!(f, "seg {}..{}ms w={:.2} seed={}", start_ms, end_ms, weight, can_seed);
+        }
+        if self.segments.len() >= MAX_SEGMENTS {
+            self.segments.remove(0);
+        }
+        self.segments.push(SegRec {
+            start_ms,
+            end_ms,
+            embedding,
+            weight,
+            can_seed,
+        });
+        self.segments_since_recluster += 1;
+        let due = self.segments_since_recluster >= RECLUSTER_EVERY_SEGMENTS
+            || end_ms.saturating_sub(self.last_recluster_audio_ms) >= RECLUSTER_EVERY_MS;
+        if due {
+            self.recluster(end_ms);
+        }
+    }
+
+    fn recluster(&mut self, audio_ms: u64) {
+        self.segments_since_recluster = 0;
+        self.last_recluster_audio_ms = audio_ms;
+        let labels = self.clusterer.recluster(&self.segments);
+        let rebuilt: Vec<SpeakerRange> = self
+            .segments
+            .iter()
+            .zip(labels)
+            .map(|(seg, (label, confidence))| SpeakerRange {
+                start_ms: seg.start_ms,
+                end_ms: seg.end_ms,
+                label,
+                confidence,
+            })
+            .collect();
+        if let Some(f) = self.debug.as_mut() {
+            use std::io::Write;
+            let speakers = self.clusterer.centroids.len();
             let _ = writeln!(
                 f,
-                "{}..{}ms sim={:.3} {}",
-                range.start_ms,
-                range.end_ms,
-                range.confidence,
-                range.label.display()
+                "recluster: {} segments -> {} speakers",
+                rebuilt.len(),
+                speakers
             );
         }
-        self.ranges.lock().unwrap().push(range);
+        *self.ranges.lock().unwrap() = rebuilt;
+        self.version
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 
     pub fn push_chunk(&mut self, samples: &[i16], t_ms: u64) {
@@ -420,10 +566,13 @@ impl DiarizerCore {
                 }
             }
         }
+        // Final reconciliation: one full pass over everything.
+        let last = self.segments.last().map(|s| s.end_ms).unwrap_or(0);
+        self.recluster(last);
     }
 
     fn drain_sherpa_segments(&mut self) {
-        let mut sealed = Vec::new();
+        let mut sealed: Vec<(u64, u64, Vec<f32>)> = Vec::new();
         {
             let Backend::Sherpa {
                 vad,
@@ -451,18 +600,11 @@ impl DiarizerCore {
                         continue;
                     }
                 };
-                let allow_new = end_ms.saturating_sub(start_ms) >= MIN_NEW_CLUSTER_MS;
-                let (label, confidence) = self.engine.assign(&embedding, allow_new);
-                sealed.push(SpeakerRange {
-                    start_ms,
-                    end_ms,
-                    label,
-                    confidence,
-                });
+                sealed.push((start_ms, end_ms, embedding));
             }
         }
-        for range in sealed {
-            self.record_range(range);
+        for (start_ms, end_ms, embedding) in sealed {
+            self.add_segment(start_ms, end_ms, embedding);
         }
     }
 
@@ -500,7 +642,7 @@ impl DiarizerCore {
     }
 
     fn fallback_close_segment(&mut self, start_ms: u64) {
-        let range = {
+        let sealed = {
             let Backend::Fallback {
                 extractor,
                 seg_samples,
@@ -516,17 +658,9 @@ impl DiarizerCore {
             if end_ms.saturating_sub(start_ms) < MIN_SEGMENT_MS {
                 return;
             }
-            let embedding = extractor.embed(&samples);
-            let allow_new = end_ms.saturating_sub(start_ms) >= MIN_NEW_CLUSTER_MS;
-            let (label, confidence) = self.engine.assign(&embedding, allow_new);
-            SpeakerRange {
-                start_ms,
-                end_ms,
-                label,
-                confidence,
-            }
+            (start_ms, end_ms, extractor.embed(&samples))
         };
-        self.record_range(range);
+        self.add_segment(sealed.0, sealed.1, sealed.2);
     }
 }
 
@@ -542,6 +676,7 @@ enum DiarCmd {
 pub struct DiarizerHandle {
     tx: Option<mpsc::Sender<DiarCmd>>,
     ranges: Arc<Mutex<Vec<SpeakerRange>>>,
+    version: Arc<std::sync::atomic::AtomicU64>,
     thread: Option<std::thread::JoinHandle<()>>,
     /// True when running on sherpa-onnx models, false on the fallback.
     pub sherpa_active: bool,
@@ -553,6 +688,8 @@ impl DiarizerHandle {
     /// `debug_log` enables the per-segment similarity trace.
     pub fn spawn(models: Option<ModelPaths>, debug_log: Option<std::path::PathBuf>) -> Self {
         let ranges: Arc<Mutex<Vec<SpeakerRange>>> = Arc::new(Mutex::new(Vec::new()));
+        let version = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let version_thread = version.clone();
         let (tx, rx) = mpsc::channel::<DiarCmd>();
         let ranges_thread = ranges.clone();
         let (init_tx, init_rx) = mpsc::sync_channel::<bool>(1);
@@ -584,6 +721,7 @@ impl DiarizerHandle {
             if let Some(path) = debug_log {
                 core.debug = std::fs::File::create(path).ok();
             }
+            core.version = version_thread;
             while let Ok(cmd) = rx.recv() {
                 match cmd {
                     DiarCmd::Chunk(samples, t_ms) => core.push_chunk(&samples, t_ms),
@@ -599,9 +737,17 @@ impl DiarizerHandle {
         Self {
             tx: Some(tx),
             ranges,
+            version,
             thread: Some(thread),
             sherpa_active,
         }
+    }
+
+    /// Monotonic counter bumped on every re-cluster. When it changes,
+    /// previously sealed transcript entries should have their speaker
+    /// labels recomputed.
+    pub fn version(&self) -> u64 {
+        self.version.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     pub fn push_chunk(&self, samples: &[i16], t_ms: u64) {
@@ -791,5 +937,20 @@ mod tests {
             handle.label_for_span(0, 1000),
             Some(SpeakerLabel::Speaker(1))
         );
+        assert!(handle.version() >= 1, "finish must run a reconciliation pass");
+    }
+
+    #[test]
+    fn recluster_is_global_and_labels_stay_stable() {
+        let (mut d, ranges) = fallback_core();
+        // Voice A, voice B, then voice A again across many segments.
+        run_segments(&mut d, &[5000, 20000, 5000, 20000, 5000]);
+        d.finish();
+        let ranges = ranges.lock().unwrap();
+        assert_eq!(ranges.len(), 5);
+        assert_eq!(ranges[0].label, ranges[2].label);
+        assert_eq!(ranges[2].label, ranges[4].label);
+        assert_eq!(ranges[1].label, ranges[3].label);
+        assert_ne!(ranges[0].label, ranges[1].label);
     }
 }

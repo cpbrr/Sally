@@ -127,6 +127,18 @@ export function onWarning(cb: (message: string) => void): Promise<UnlistenFn> {
   return listen<string>("sally://warning", (ev) => cb(ev.payload));
 }
 
+export interface EntryUpdate {
+  index: number;
+  speaker: string;
+}
+
+/** Diarization re-cluster relabeled earlier entries. */
+export function onEntryUpdate(
+  cb: (updates: EntryUpdate[]) => void
+): Promise<UnlistenFn> {
+  return listen<EntryUpdate[]>("sally://entry-update", (ev) => cb(ev.payload));
+}
+
 export function formatTimestamp(ms: number): string {
   const totalS = Math.floor(ms / 1000);
   const h = Math.floor(totalS / 3600);

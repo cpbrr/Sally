@@ -204,6 +204,11 @@ async fn run_session(
     let mut last_concrete_speaker: Option<u32> = None;
     /// Don't split entries with fewer original characters than this.
     const MIN_SPLIT_CHARS: usize = 12;
+    // Full meeting timeline kept in memory: every re-cluster pass may
+    // relabel past entries (deferred commitment), and the final
+    // reconciliation rewrites the raw file from this list.
+    let mut sealed_entries: Vec<crate::timeline::TimelineEntry> = Vec::new();
+    let mut diar_version_seen = 0u64;
     let mut speakers: BTreeSet<String> = BTreeSet::new();
     let mut paused = false;
     let mut last_chunk_ms: u64 = 0;
@@ -326,8 +331,8 @@ async fn run_session(
                                                 Some(&diarizer as &dyn SpeakerLookup),
                                             )
                                         {
-                                            emit_sealed(&app, sealed, &mut store,
-                                                        &config, &mut speakers);
+                                            emit_sealed(&app, sealed, &mut store, &config,
+                                                        &mut speakers, &mut sealed_entries);
                                         }
                                     }
                                     last_concrete_speaker = Some(n);
@@ -359,7 +364,7 @@ async fn run_session(
                         play(&mut player, &mut readout_enabled, &tail);
                     }
                     finalize_entry(&app, &mut assembler, &diarizer, &mut store,
-                                   &config, &mut speakers);
+                                   &config, &mut speakers, &mut sealed_entries);
                     last_fragment_ms = 0;
                 }
             }
@@ -375,6 +380,7 @@ async fn run_session(
                             if now.saturating_sub(start) >= GAP_MARK_THRESHOLD_MS {
                                 let gap = assembler.gap(start, now);
                                 append_and_emit(&app, &mut store, &config, &gap);
+                                sealed_entries.push(gap);
                             }
                         }
                         if !paused {
@@ -434,7 +440,8 @@ async fn run_session(
                         if let Some(sealed) = assembler
                             .split_for_speaker_change(Some(&diarizer as &dyn SpeakerLookup))
                         {
-                            emit_sealed(&app, sealed, &mut store, &config, &mut speakers);
+                            emit_sealed(&app, sealed, &mut store, &config,
+                                        &mut speakers, &mut sealed_entries);
                         }
                         last_fragment_ms = 0;
                     }
@@ -494,8 +501,14 @@ async fn run_session(
                 }
             }
 
-            // Periodic recovery journal (design §8.2).
+            // Periodic recovery journal (design §8.2) + label refresh after
+            // each diarizer re-cluster.
             _ = journal_tick.tick() => {
+                let v = diarizer.version();
+                if v != diar_version_seen {
+                    diar_version_seen = v;
+                    refresh_labels(&app, &diarizer, &mut sealed_entries);
+                }
                 let partial = assembler.partial();
                 let journal = RecoveryJournal {
                     open_original: partial.as_ref().map(|p| p.original.clone()).unwrap_or_default(),
@@ -510,16 +523,30 @@ async fn run_session(
         }
     }
 
-    // Meeting end: finalize open entry, close diarization, remove journal.
+    // Meeting end: close diarization (final reconciliation pass), relabel
+    // the whole timeline, finalize open entries, and rewrite the raw file
+    // with the reconciled labels.
     alive.store(false, Ordering::SeqCst);
     capture_handle.stop();
     diarizer.finish();
-    finalize_entry(&app, &mut assembler, &diarizer, &mut store, &config, &mut speakers);
+    refresh_labels(&app, &diarizer, &mut sealed_entries);
+    finalize_entry(&app, &mut assembler, &diarizer, &mut store, &config,
+                   &mut speakers, &mut sealed_entries);
     drop(conn);
+    if let Err(e) = store.rewrite_with_entries(&sealed_entries, &config.target_language) {
+        log::error!("final transcript rewrite failed: {e}");
+    }
     if let Err(e) = store.finalize() {
         log::error!("finalize failed: {e}");
     }
     emit_status(&app, "ended", "");
+    // Speaker list from the reconciled timeline, not the provisional seals.
+    let mut speakers: BTreeSet<String> = sealed_entries
+        .iter()
+        .filter(|e| !e.speaker.is_empty())
+        .map(|e| e.speaker.clone())
+        .collect();
+    speakers.insert("You".into());
     let _ = done_tx.send(Ok(ReviewData {
         store,
         speakers: speakers.into_iter().collect(),
@@ -554,6 +581,7 @@ fn emit_sealed(
     store: &mut MeetingStore,
     config: &AppConfig,
     speakers: &mut BTreeSet<String>,
+    sealed_entries: &mut Vec<crate::timeline::TimelineEntry>,
 ) {
     // echoTargetLanguage=false means passages already in the target
     // language get no model translation; mirror the original so the
@@ -567,6 +595,7 @@ fn emit_sealed(
     }
     speakers.insert(entry.speaker.clone());
     append_and_emit(app, store, config, &entry);
+    sealed_entries.push(entry);
 }
 
 fn finalize_entry(
@@ -576,9 +605,39 @@ fn finalize_entry(
     store: &mut MeetingStore,
     config: &AppConfig,
     speakers: &mut BTreeSet<String>,
+    sealed_entries: &mut Vec<crate::timeline::TimelineEntry>,
 ) {
     for entry in assembler.finalize_turn(Some(diarizer as &dyn SpeakerLookup)) {
-        emit_sealed(app, entry, store, config, speakers);
+        emit_sealed(app, entry, store, config, speakers, sealed_entries);
+    }
+}
+
+/// Recompute speaker labels for already-sealed entries against the latest
+/// diarization state (deferred commitment: past labels heal as more of each
+/// voice is heard). Emits `sally://entry-update` for changed entries.
+fn refresh_labels(
+    app: &AppHandle,
+    diarizer: &DiarizerHandle,
+    sealed_entries: &mut [crate::timeline::TimelineEntry],
+) {
+    use crate::diarization::SpeakerLabel;
+    use crate::timeline::EntryKind;
+    let mut updates: Vec<serde_json::Value> = Vec::new();
+    for e in sealed_entries.iter_mut() {
+        if e.kind != EntryKind::Speech || e.speaker == "You" {
+            continue;
+        }
+        let label = diarizer
+            .label_for_span(e.start_ms, e.end_ms.max(e.start_ms + 1))
+            .unwrap_or(SpeakerLabel::Meeting)
+            .display();
+        if label != e.speaker {
+            e.speaker = label.clone();
+            updates.push(json!({ "index": e.index, "speaker": label }));
+        }
+    }
+    if !updates.is_empty() {
+        let _ = app.emit("sally://entry-update", updates);
     }
 }
 
