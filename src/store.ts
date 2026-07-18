@@ -40,6 +40,7 @@ interface SallyState {
   setStatus: (state: string, detail: string) => void;
   setWarning: (w: string) => void;
   addEntry: (e: TimelineEntry) => void;
+  updateEntrySpeakers: (updates: { index: number; speaker: string }[]) => void;
   setPartial: (p: PartialEntry | null) => void;
   setReview: (r: ReviewInfo | null) => void;
   setPendingRecoveries: (n: number) => void;
@@ -79,6 +80,14 @@ export const useSally = create<SallyState>((set, get) => ({
   setStatus: (status, statusDetail) => set({ status, statusDetail }),
   setWarning: (warning) => set({ warning }),
   addEntry: (e) => set({ entries: [...get().entries, e] }),
+  updateEntrySpeakers: (updates) => {
+    const map = new Map(updates.map((u) => [u.index, u.speaker]));
+    set({
+      entries: get().entries.map((e) =>
+        map.has(e.index) ? { ...e, speaker: map.get(e.index)! } : e
+      ),
+    });
+  },
   setPartial: (partial) => set({ partial }),
   setReview: (review) => set({ review }),
   setPendingRecoveries: (pendingRecoveries) => set({ pendingRecoveries }),

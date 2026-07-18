@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { api, onEntry, onPartial, onStatus, onWarning } from "./api";
+import {
+  api,
+  onEntry,
+  onEntryUpdate,
+  onPartial,
+  onStatus,
+  onWarning,
+} from "./api";
 import { Panels } from "./components/Panels";
 import { ProcessingScreen, SavedPopup } from "./components/Processing";
 import { SessionBar } from "./components/SessionBar";
@@ -71,6 +78,7 @@ export default function App() {
     setStatus,
     setWarning,
     addEntry,
+    updateEntrySpeakers,
     setPartial,
     setPaused,
   } = useSally();
@@ -89,6 +97,7 @@ export default function App() {
         if (s.state === "live") setPaused(false);
       }),
       onEntry((e) => addEntry(e)),
+      onEntryUpdate((u) => updateEntrySpeakers(u)),
       onPartial((p) => setPartial(p)),
       onWarning((w) => setWarning(w)),
     ];
