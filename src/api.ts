@@ -67,6 +67,8 @@ export interface StatusPayload {
 
 export interface ReviewInfo {
   raw_path: string;
+  raw_dir: string;
+  polished_dir: string;
   speakers: string[];
 }
 
@@ -84,6 +86,7 @@ export const api = {
     invoke<RedactedConfig>("set_readout", { enabled }),
   resumeMeeting: () => invoke<void>("resume_meeting"),
   endMeeting: () => invoke<ReviewInfo>("end_meeting"),
+  getLastMeeting: () => invoke<ReviewInfo | null>("get_last_meeting"),
   applyReview: (renames: Record<string, string>, meetingTitle?: string) =>
     invoke<ReviewInfo>("apply_review", {
       renames,

@@ -23,6 +23,7 @@ export function SessionBar() {
     config,
     status,
     statusDetail,
+    review,
     setPhase,
     setPaused,
     setReview,
@@ -82,11 +83,20 @@ export function SessionBar() {
     try {
       const review = await api.endMeeting();
       setReview(review);
-      setPhase("review");
+      setPhase("saved");
     } catch (e) {
       setError(String(e));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const openProcessing = async () => {
+    // Refresh from the core in case the app state was reset.
+    const last = await api.getLastMeeting().catch(() => null);
+    if (last) {
+      setReview(last);
+      setPhase("processing");
     }
   };
 
@@ -95,9 +105,20 @@ export function SessionBar() {
       <div className="session-bar">
         <span className="elapsed">{formatElapsed(Math.max(0, elapsed))}</span>
         {phase !== "live" ? (
-          <button className="btn primary" onClick={start} disabled={busy}>
-            {dict.start}
-          </button>
+          <>
+            <button className="btn primary" onClick={start} disabled={busy}>
+              {dict.start}
+            </button>
+            {review && (
+              <button
+                className="btn"
+                title={dict.processLastMeeting}
+                onClick={openProcessing}
+              >
+                📄
+              </button>
+            )}
+          </>
         ) : (
           <>
             <button className="btn" onClick={togglePause}>

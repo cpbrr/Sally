@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { api, onEntry, onPartial, onStatus } from "./api";
 import { Panels } from "./components/Panels";
-import { ReviewScreen } from "./components/ReviewScreen";
+import { ProcessingScreen, SavedPopup } from "./components/Processing";
 import { SessionBar } from "./components/SessionBar";
 import { Settings } from "./components/Settings";
 import { SetupWizard } from "./components/SetupWizard";
 import { TitleBar } from "./components/TitleBar";
 import { useSally } from "./store";
-import { applyTransparency, loadTransparency } from "./transparency";
+import { initTransparency } from "./transparency";
 
 function RecoveryPrompt() {
   const { dict, setPendingRecoveries } = useSally();
@@ -79,7 +79,7 @@ export default function App() {
     if (booted.current) return;
     booted.current = true;
 
-    applyTransparency(loadTransparency());
+    initTransparency();
 
     const unlisteners: Array<Promise<() => void>> = [
       onStatus((s) => {
@@ -109,10 +109,16 @@ export default function App() {
   return (
     <div className="app">
       <TitleBar />
-      <Panels />
-      <SessionBar />
+      {phase === "processing" ? (
+        <ProcessingScreen />
+      ) : (
+        <>
+          <Panels />
+          <SessionBar />
+        </>
+      )}
       {phase === "setup" && <SetupWizard />}
-      {phase === "review" && <ReviewScreen />}
+      {phase === "saved" && <SavedPopup />}
       {showSettings && <Settings />}
       {phase === "idle" && pendingRecoveries > 0 && <RecoveryPrompt />}
     </div>

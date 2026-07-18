@@ -269,7 +269,18 @@ pub async fn resume_meeting(state: State<'_, AppState>) -> Result<()> {
 #[derive(Serialize)]
 pub struct ReviewInfo {
     pub raw_path: String,
+    pub raw_dir: String,
+    pub polished_dir: String,
     pub speakers: Vec<String>,
+}
+
+fn review_info(review: &ReviewData) -> ReviewInfo {
+    ReviewInfo {
+        raw_path: review.store.raw_path().to_string_lossy().into_owned(),
+        raw_dir: review.store.raw_dir().to_string_lossy().into_owned(),
+        polished_dir: review.store.polished_dir().to_string_lossy().into_owned(),
+        speakers: review.speakers.clone(),
+    }
 }
 
 /// End the meeting and enter review (design §6.4). The raw transcript is
@@ -290,12 +301,15 @@ pub async fn end_meeting(state: State<'_, AppState>) -> Result<ReviewInfo> {
     let review = done_rx
         .await
         .map_err(|_| SallyError::Session("session task dropped".into()))??;
-    let info = ReviewInfo {
-        raw_path: review.store.raw_path().to_string_lossy().into_owned(),
-        speakers: review.speakers.clone(),
-    };
+    let info = review_info(&review);
     *state.last_meeting.lock().await = Some(review);
     Ok(info)
+}
+
+/// Re-open the last finished meeting in the processing screen.
+#[tauri::command]
+pub async fn get_last_meeting(state: State<'_, AppState>) -> Result<Option<ReviewInfo>> {
+    Ok(state.last_meeting.lock().await.as_ref().map(review_info))
 }
 
 /// Apply review actions: global speaker rename/merge and optional meeting
@@ -324,10 +338,7 @@ pub async fn apply_review(
             review.store.rename_meeting(&title)?;
         }
     }
-    Ok(ReviewInfo {
-        raw_path: review.store.raw_path().to_string_lossy().into_owned(),
-        speakers: review.speakers.clone(),
-    })
+    Ok(review_info(review))
 }
 
 /// Timestamp-free copy; raw file untouched (design §2).

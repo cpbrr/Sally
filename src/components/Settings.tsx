@@ -8,13 +8,19 @@ import {
   UiLanguage,
 } from "../i18n";
 import { useSally } from "../store";
-import { applyTransparency, loadTransparency } from "../transparency";
+import {
+  isTranslucent,
+  loadLevel,
+  setLevel,
+  setTranslucent,
+} from "../transparency";
 
 export function Settings() {
   const { dict, config, setConfig, setUiLanguage, setShowSettings, phase } =
     useSally();
   const [devices, setDevices] = useState<AudioDevices>({ inputs: [], outputs: [] });
   const [apiKey, setApiKey] = useState("");
+  const [showKey, setShowKey] = useState(false);
   const [form, setForm] = useState({
     ui_language: config?.ui_language ?? "en",
     target_language: config?.target_language ?? "Vietnamese",
@@ -22,19 +28,29 @@ export function Settings() {
     mic_device: config?.mic_device ?? "",
     system_device: config?.system_device ?? "",
     diarization_enabled: config?.diarization_enabled ?? true,
-    always_on_top: config?.always_on_top ?? true,
+    always_on_top: config?.always_on_top ?? false,
     readout_enabled: config?.readout_enabled ?? false,
     live_model: config?.live_model ?? "",
     cleanup_model: config?.cleanup_model ?? "",
   });
   const [error, setError] = useState("");
-  const [alpha, setAlpha] = useState(loadTransparency());
+  const [translucent, setTranslucentState] = useState(isTranslucent());
+  const [alpha, setAlpha] = useState(loadLevel());
 
   useEffect(() => {
     api.listAudioDevices().then(setDevices).catch(() => {});
     // Show the stored key so the box never looks empty after saving.
     api.getApiKey().then(setApiKey).catch(() => {});
   }, []);
+
+  // Close on Escape.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowSettings(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [setShowSettings]);
 
   const pickFolder = async () => {
     const dir = await open({ directory: true, multiple: false });
@@ -56,9 +72,14 @@ export function Settings() {
     }
   };
 
+  const toggleTranslucent = (on: boolean) => {
+    setTranslucentState(on);
+    setTranslucent(on);
+  };
+
   const changeAlpha = (v: number) => {
     setAlpha(v);
-    applyTransparency(v);
+    setLevel(v);
   };
 
   return (
@@ -96,11 +117,21 @@ export function Settings() {
 
         <label>
           {dict.setupApiKey}
-          <input
-            type="password"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-          />
+          <div className="row">
+            <input
+              type={showKey ? "text" : "password"}
+              style={{ flex: 1 }}
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+            />
+            <button
+              className="btn compact"
+              title={showKey ? "Hide" : "Show"}
+              onClick={() => setShowKey(!showKey)}
+            >
+              {showKey ? "🙈" : "👁"}
+            </button>
+          </div>
         </label>
 
         <label>
@@ -175,16 +206,26 @@ export function Settings() {
         </label>
         <p className="field-hint">{dict.readoutHint}</p>
 
-        <label>
-          {dict.transparency} ({alpha}%)
+        <label className="check">
           <input
-            type="range"
-            min={10}
-            max={100}
-            value={alpha}
-            onChange={(e) => changeAlpha(Number(e.target.value))}
+            type="checkbox"
+            checked={translucent}
+            onChange={(e) => toggleTranslucent(e.target.checked)}
           />
+          {dict.translucent}
         </label>
+        {translucent && (
+          <label>
+            {dict.transparency} ({alpha}%)
+            <input
+              type="range"
+              min={40}
+              max={100}
+              value={alpha}
+              onChange={(e) => changeAlpha(Number(e.target.value))}
+            />
+          </label>
+        )}
 
         <label>
           {dict.liveModel}

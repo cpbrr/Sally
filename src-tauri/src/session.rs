@@ -246,13 +246,25 @@ async fn run_session(
                 pipeline.push(frame);
                 while let Some(chunk) = pipeline.next_chunk() {
                     last_chunk_ms = chunk.t_ms;
-                    if let Some(d) = diarizer.as_mut() {
-                        d.push_chunk(&chunk.system, chunk.t_ms);
+                    // While readout audio is playing, system audio contains
+                    // our own spoken translation (loopback). Feeding it back
+                    // would translate the translation in a loop — send
+                    // microphone-only audio and skip diarization until the
+                    // playback (plus a short tail) has finished.
+                    let readout_playing = player
+                        .as_mut()
+                        .map(|p| p.is_active())
+                        .unwrap_or(false);
+                    if !readout_playing {
+                        if let Some(d) = diarizer.as_mut() {
+                            d.push_chunk(&chunk.system, chunk.t_ms);
+                        }
                     }
                     assembler.push_mic_activity(chunk.mic_active, chunk.t_ms);
                     if let Some(c) = conn.as_ref() {
+                        let payload = if readout_playing { chunk.mic } else { chunk.mixed };
                         // try_send: a stalled socket must not block audio.
-                        if c.audio_tx.try_send(chunk.mixed).is_err() {
+                        if c.audio_tx.try_send(payload).is_err() {
                             log::warn!("live audio queue full; dropping chunk {}", chunk.seq);
                         }
                     }

@@ -33,43 +33,54 @@ pub struct RecoveryJournal {
 }
 
 pub struct MeetingStore {
-    meetings_dir: PathBuf,
+    raw_dir: PathBuf,
+    polished_dir: PathBuf,
     recovery_dir: PathBuf,
     raw_path: PathBuf,
+    /// Date-time filename prefix, `DD-MM-YYYY_HH.MM` (24-hour; `.` instead
+    /// of `:` because Windows forbids colons in filenames).
+    prefix: String,
     stem: String,
     meta: MeetingMeta,
 }
 
 impl MeetingStore {
-    /// Create the raw file with its metadata header. Filename starts with
-    /// local date and time: `2026-07-17_1430-untitled-raw.md`.
+    /// Create the raw file with its metadata header. Raw and polished files
+    /// live in separate folders; filenames are
+    /// `DD-MM-YYYY_HH.MM-name.md`.
     pub fn create(
         meetings_dir: PathBuf,
         recovery_dir: PathBuf,
         started: chrono::DateTime<chrono::Local>,
         target_language: &str,
     ) -> Result<Self> {
-        std::fs::create_dir_all(&meetings_dir)?;
+        let raw_dir = meetings_dir.join("raw");
+        let polished_dir = meetings_dir.join("polished");
+        std::fs::create_dir_all(&raw_dir)?;
+        std::fs::create_dir_all(&polished_dir)?;
         std::fs::create_dir_all(&recovery_dir)?;
-        let mut stem = format!("{}-untitled", started.format("%Y-%m-%d_%H%M"));
+        let prefix = started.format("%d-%m-%Y_%H.%M").to_string();
+        let mut stem = format!("{prefix}-untitled");
         // Avoid clobbering an existing meeting started the same minute.
         let mut n = 1;
-        while meetings_dir.join(format!("{stem}-raw.md")).exists() {
+        while raw_dir.join(format!("{stem}.md")).exists() {
             n += 1;
-            stem = format!("{}-untitled-{n}", started.format("%Y-%m-%d_%H%M"));
+            stem = format!("{prefix}-untitled-{n}");
         }
-        let raw_path = meetings_dir.join(format!("{stem}-raw.md"));
+        let raw_path = raw_dir.join(format!("{stem}.md"));
         let meta = MeetingMeta {
             title: "Untitled meeting".into(),
-            started_at: started.format("%Y-%m-%d %H:%M").to_string(),
+            started_at: started.format("%d-%m-%Y %H:%M").to_string(),
             target_language: target_language.to_string(),
         };
         let header = render_header(&meta);
         std::fs::write(&raw_path, header)?;
         Ok(Self {
-            meetings_dir,
+            raw_dir,
+            polished_dir,
             recovery_dir,
             raw_path,
+            prefix,
             stem,
             meta,
         })
@@ -79,13 +90,20 @@ impl MeetingStore {
         &self.raw_path
     }
 
+    pub fn raw_dir(&self) -> &Path {
+        &self.raw_dir
+    }
+
+    pub fn polished_dir(&self) -> &Path {
+        &self.polished_dir
+    }
+
     pub fn polished_path(&self) -> PathBuf {
-        self.meetings_dir.join(format!("{}-polished.md", self.stem))
+        self.polished_dir.join(format!("{}.md", self.stem))
     }
 
     pub fn export_path(&self) -> PathBuf {
-        self.meetings_dir
-            .join(format!("{}-raw-no-timestamps.md", self.stem))
+        self.raw_dir.join(format!("{}-no-timestamps.md", self.stem))
     }
 
     fn journal_path(&self) -> PathBuf {
@@ -155,21 +173,32 @@ impl MeetingStore {
             return Err(SallyError::Storage("empty meeting name".into()));
         }
         // Keep the date-time prefix, replace the rest of the stem.
-        let prefix: String = self.stem.chars().take(15).collect(); // YYYY-MM-DD_HHMM
-        let new_stem = format!("{prefix}-{safe}");
+        let new_stem = format!("{}-{safe}", self.prefix);
         if new_stem == self.stem {
             return Ok(());
         }
-        for suffix in ["raw.md", "polished.md", "raw-no-timestamps.md"] {
-            let old = self.meetings_dir.join(format!("{}-{suffix}", self.stem));
+        let moves = [
+            (self.raw_dir.clone(), format!("{}.md", self.stem), format!("{new_stem}.md")),
+            (
+                self.raw_dir.clone(),
+                format!("{}-no-timestamps.md", self.stem),
+                format!("{new_stem}-no-timestamps.md"),
+            ),
+            (
+                self.polished_dir.clone(),
+                format!("{}.md", self.stem),
+                format!("{new_stem}.md"),
+            ),
+        ];
+        for (dir, old_name, new_name) in moves {
+            let old = dir.join(old_name);
             if old.exists() {
-                let new = self.meetings_dir.join(format!("{new_stem}-{suffix}"));
-                std::fs::rename(old, new)?;
+                std::fs::rename(old, dir.join(new_name))?;
             }
         }
         let old_journal = self.journal_path();
         self.stem = new_stem;
-        self.raw_path = self.meetings_dir.join(format!("{}-raw.md", self.stem));
+        self.raw_path = self.raw_dir.join(format!("{}.md", self.stem));
         if old_journal.exists() {
             std::fs::rename(old_journal, self.journal_path())?;
         }
@@ -432,6 +461,24 @@ mod tests {
         assert_eq!(MeetingStore::pending_recoveries(&r).len(), 1);
         store.finalize().unwrap();
         assert!(MeetingStore::pending_recoveries(&r).is_empty());
+    }
+
+    #[test]
+    fn filenames_use_day_month_year_and_split_folders() {
+        use chrono::TimeZone;
+        let (m, r) = tmp_dirs("naming");
+        let started = chrono::Local.with_ymd_and_hms(2026, 7, 18, 14, 5, 0).unwrap();
+        let store = MeetingStore::create(m, r, started, "Vietnamese").unwrap();
+        let name = store
+            .raw_path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        assert!(name.starts_with("18-07-2026_14.05-untitled"), "{name}");
+        assert!(store.raw_path().parent().unwrap().ends_with("raw"));
+        assert!(store.polished_path().parent().unwrap().ends_with("polished"));
+        assert!(store.export_path().parent().unwrap().ends_with("raw"));
     }
 
     #[test]

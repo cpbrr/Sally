@@ -7,7 +7,13 @@ import {
 } from "./api";
 import { dictionaries, Dict, UiLanguage } from "./i18n";
 
-export type Phase = "boot" | "setup" | "idle" | "live" | "review";
+export type Phase =
+  | "boot"
+  | "setup"
+  | "idle"
+  | "live"
+  | "saved"
+  | "processing";
 
 interface SallyState {
   phase: Phase;

@@ -43,6 +43,9 @@ pub struct MixedChunk {
     pub mixed: Vec<i16>,
     /// System-only copy for diarization.
     pub system: Vec<i16>,
+    /// Microphone-only copy, sent instead of `mixed` while readout audio is
+    /// playing so the spoken translation is not translated again.
+    pub mic: Vec<i16>,
     /// True when the microphone carried speech-level energy in this chunk.
     pub mic_active: bool,
 }
