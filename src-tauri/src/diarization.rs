@@ -25,19 +25,16 @@ const MIN_SEGMENT_MS: u64 = 400;
 // Fallback (energy VAD + spectral profile) tuning.
 const FB_SILENCE_CLOSE_MS: u64 = 600;
 const FB_SPEECH_RMS: f32 = 0.010;
-const FB_JOIN_SIMILARITY: f32 = 0.86;
-const FB_SEED_BELOW: f32 = 0.60;
-const FB_CONFIDENT_SIMILARITY: f32 = 0.55;
 
-// sherpa speaker-embedding tuning, calibrated against TitaNet-small on
-// known-speaker audio: same-speaker cosine ≈ 0.73, different-speaker
-// ≈ 0.15–0.19. Join sits in the gap; seeding uses a stricter bar
-// (hysteresis) because noisy 2 s windows of the SAME voice can dip below
-// the join threshold — without the gap between the two, such windows
-// spawned phantom speakers until the cluster cap.
-const SHERPA_JOIN_SIMILARITY: f32 = 0.45;
-const SHERPA_SEED_BELOW: f32 = 0.32;
-const SHERPA_CONFIDENT_SIMILARITY: f32 = 0.20;
+// Thresholds are estimated per meeting from the pairwise-similarity
+// distribution (Otsu split): fixed constants calibrated on clean audio do
+// not transfer — compressed meeting audio shifts same-speaker cosines to
+// ~0.8 and cross-speaker to ~0.5-0.6, far above any clean-audio setting.
+/// Below this separation between the two similarity populations the audio
+/// is treated as single-speaker (no reliable split exists).
+const MIN_SPLIT_MARGIN: f32 = 0.12;
+/// Sample cap for the O(n²) pairwise estimate.
+const THRESHOLD_SAMPLE: usize = 256;
 /// A cluster this light that also holds under 5% of total speech is noise:
 /// dissolved on each pass, members reassigned or left uncertain.
 const MIN_CLUSTER_WEIGHT: f32 = 4.0;
@@ -228,23 +225,100 @@ struct SegRec {
 /// never flap. Past assignments are recomputed each pass — early mistakes
 /// heal as context accumulates instead of poisoning the meeting.
 pub struct GlobalClusterer {
-    join_threshold: f32,
-    /// Seeding hysteresis: a new speaker is created only below this.
-    seed_below: f32,
-    confident_threshold: f32,
     /// Speaker centroids; index = speaker ID - 1. May be renumbered by a
     /// merge/dissolve pass — safe because every pass relabels the entire
     /// timeline.
     centroids: Vec<Vec<f32>>,
+    /// Last estimated threshold and population margin, for the debug log.
+    pub last_threshold: f32,
+    pub last_margin: f32,
+}
+
+/// Per-pass adaptive thresholds derived from the meeting's own similarity
+/// distribution.
+enum ThresholdEstimate {
+    /// No reliable bimodal structure: treat as one speaker.
+    Single,
+    Split {
+        join: f32,
+        seed_below: f32,
+        confident: f32,
+    },
 }
 
 impl GlobalClusterer {
-    fn new(join_threshold: f32, seed_below: f32, confident_threshold: f32) -> Self {
+    fn new() -> Self {
         Self {
-            join_threshold,
-            seed_below,
-            confident_threshold,
             centroids: Vec::new(),
+            last_threshold: 0.0,
+            last_margin: 0.0,
+        }
+    }
+
+    /// Otsu-style split of pairwise similarities. Same-speaker and
+    /// cross-speaker pairs form two populations; the threshold maximizing
+    /// between-class variance sits in the gap — wherever this recording's
+    /// channel put it.
+    fn estimate_threshold(&mut self, segments: &[SegRec]) -> ThresholdEstimate {
+        // Heaviest segments only; O(n²) pairs.
+        let mut idx: Vec<usize> = (0..segments.len()).collect();
+        idx.sort_by(|&a, &b| {
+            segments[b]
+                .weight
+                .partial_cmp(&segments[a].weight)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        idx.truncate(THRESHOLD_SAMPLE);
+        let mut sims: Vec<f32> = Vec::with_capacity(idx.len() * (idx.len() - 1) / 2);
+        for i in 0..idx.len() {
+            for j in (i + 1)..idx.len() {
+                sims.push(cosine(
+                    &segments[idx[i]].embedding,
+                    &segments[idx[j]].embedding,
+                ));
+            }
+        }
+        if sims.len() < 3 {
+            return ThresholdEstimate::Single;
+        }
+        sims.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        // Between-class variance maximization over sorted values.
+        let total: f32 = sims.iter().sum();
+        let n = sims.len() as f32;
+        let mut best: Option<(usize, f32)> = None;
+        let mut low_sum = 0.0f32;
+        for (k, &s) in sims.iter().enumerate().take(sims.len() - 1) {
+            low_sum += s;
+            let n0 = (k + 1) as f32;
+            let n1 = n - n0;
+            let mu0 = low_sum / n0;
+            let mu1 = (total - low_sum) / n1;
+            let between = (n0 / n) * (n1 / n) * (mu1 - mu0) * (mu1 - mu0);
+            if best.map(|(_, b)| between > b).unwrap_or(true) {
+                best = Some((k, between));
+            }
+        }
+        let Some((k, _)) = best else {
+            return ThresholdEstimate::Single;
+        };
+        let n0 = k + 1;
+        let mu0 = sims[..=k].iter().sum::<f32>() / n0 as f32;
+        let mu1 = sims[k + 1..].iter().sum::<f32>() / (sims.len() - n0) as f32;
+        let margin = mu1 - mu0;
+        let share_low = n0 as f32 / n;
+        self.last_margin = margin;
+        // Weak separation, or one population is a sliver of noise pairs:
+        // no trustworthy split.
+        if margin < MIN_SPLIT_MARGIN || !(0.02..=0.98).contains(&share_low) {
+            self.last_threshold = 0.0;
+            return ThresholdEstimate::Single;
+        }
+        let t = (sims[k] + sims[k + 1]) / 2.0;
+        self.last_threshold = t;
+        ThresholdEstimate::Split {
+            join: t,
+            seed_below: t - 0.04,
+            confident: (mu0 + 0.25 * margin).max(0.2),
         }
     }
 
@@ -254,6 +328,30 @@ impl GlobalClusterer {
         if segments.is_empty() {
             return Vec::new();
         }
+        let (join_t, seed_t, conf_t) = match self.estimate_threshold(segments) {
+            ThresholdEstimate::Split {
+                join,
+                seed_below,
+                confident,
+            } => (join, seed_below, confident),
+            ThresholdEstimate::Single => {
+                // One speaker: weighted mean centroid, everything Speaker 1.
+                let dims = segments[0].embedding.len();
+                let mut mean = vec![0.0f32; dims];
+                for seg in segments {
+                    for (m, e) in mean.iter_mut().zip(&seg.embedding) {
+                        *m += e * seg.weight;
+                    }
+                }
+                normalize(&mut mean);
+                let out = segments
+                    .iter()
+                    .map(|seg| (SpeakerLabel::Speaker(1), cosine(&seg.embedding, &mean)))
+                    .collect();
+                self.centroids = vec![mean];
+                return out;
+            }
+        };
         // Warm start: k-means-style iterations seeded with the stable
         // centroids. Index identity is preserved across passes, which is
         // what keeps "Speaker 2" pointing at the same person all meeting.
@@ -285,14 +383,14 @@ impl GlobalClusterer {
                 }
                 let best_sim = best.map(|(_, s)| s).unwrap_or(-1.0);
                 let assigned = match best {
-                    Some((ci, sim)) if sim >= self.join_threshold => Some(ci),
+                    Some((ci, sim)) if sim >= join_t => Some(ci),
                     // Hysteresis: seed a new speaker only when the segment is
                     // clearly unlike every existing one. In-between segments
                     // park on the nearest cluster (without moving it much —
                     // their weight is what it is) and confidence gating
                     // decides whether to trust the label.
                     _ if seg.can_seed
-                        && best_sim < self.seed_below
+                        && best_sim < seed_t
                         && working.len() < MAX_CLUSTERS =>
                     {
                         working.push(seg.embedding.clone());
@@ -353,7 +451,7 @@ impl GlobalClusterer {
                         continue;
                     }
                     let sim = cosine(&working[i], &working[j]);
-                    if sim >= self.join_threshold
+                    if sim >= join_t
                         && best_pair.map(|(_, _, s)| sim > s).unwrap_or(true)
                     {
                         best_pair = Some((i, j, sim));
@@ -420,14 +518,14 @@ impl GlobalClusterer {
                                 best = Some((ci, sim));
                             }
                         }
-                        best.filter(|(_, s)| *s >= self.confident_threshold)
+                        best.filter(|(_, s)| *s >= conf_t)
                             .map(|(ci, _)| ci)
                     }
                 };
                 match fi {
                     Some(fi) => {
                         let sim = cosine(&seg.embedding, &self.centroids[fi]);
-                        if sim >= self.confident_threshold {
+                        if sim >= conf_t {
                             (SpeakerLabel::Speaker(fi as u32 + 1), sim)
                         } else {
                             (SpeakerLabel::Meeting, sim.max(0.0))
@@ -542,11 +640,7 @@ impl DiarizerCore {
                 extractor,
                 clock: SampleClock::new(),
             },
-            clusterer: GlobalClusterer::new(
-                SHERPA_JOIN_SIMILARITY,
-                SHERPA_SEED_BELOW,
-                SHERPA_CONFIDENT_SIMILARITY,
-            ),
+            clusterer: GlobalClusterer::new(),
             segments: Vec::new(),
             ranges,
             version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -567,11 +661,7 @@ impl DiarizerCore {
                 seg_start_ms: None,
                 seg_last_speech_ms: 0,
             },
-            clusterer: GlobalClusterer::new(
-                FB_JOIN_SIMILARITY,
-                FB_SEED_BELOW,
-                FB_CONFIDENT_SIMILARITY,
-            ),
+            clusterer: GlobalClusterer::new(),
             segments: Vec::new(),
             ranges,
             version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -977,11 +1067,12 @@ mod tests {
     #[test]
     fn different_voices_get_different_labels() {
         let (mut d, ranges) = fallback_core();
-        run_segments(&mut d, &[2000, 20000]);
+        run_segments(&mut d, &[2000, 20000, 2000]);
         d.finish();
         let ranges = ranges.lock().unwrap();
-        assert_eq!(ranges.len(), 2);
+        assert_eq!(ranges.len(), 3);
         assert_ne!(ranges[0].label, ranges[1].label);
+        assert_eq!(ranges[0].label, ranges[2].label);
     }
 
     #[test]
@@ -1080,11 +1171,12 @@ mod tests {
         println!("same-speaker sim: {same:.3}");
         println!("diff-speaker sims: {diff1:.3} {diff2:.3} {diff3:.3}");
         assert!(same > 0.5, "same-speaker similarity too low: {same}");
+        // Thresholds are adaptive now; require a usable margin between the
+        // populations instead of comparing to a fixed constant.
+        let max_diff = diff1.max(diff2).max(diff3);
         assert!(
-            diff1 < SHERPA_JOIN_SIMILARITY
-                && diff2 < SHERPA_JOIN_SIMILARITY
-                && diff3 < SHERPA_JOIN_SIMILARITY,
-            "different-speaker similarity above join threshold"
+            same - max_diff > MIN_SPLIT_MARGIN,
+            "same/different margin too small: {same} vs {max_diff}"
         );
     }
 
