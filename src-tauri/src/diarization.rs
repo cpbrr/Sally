@@ -37,8 +37,15 @@ const MAX_CLUSTERS: usize = 8;
 /// seed a new speaker (they can still join existing ones).
 const MIN_NEW_CLUSTER_MS: u64 = 800;
 /// Re-cluster after this many new segments or this much audio time.
-const RECLUSTER_EVERY_SEGMENTS: usize = 5;
+const RECLUSTER_EVERY_SEGMENTS: usize = 10;
 const RECLUSTER_EVERY_MS: u64 = 10_000;
+/// VAD segments are embedded in uniform sub-windows of this size rather
+/// than whole. Long VAD segments span multiple speakers (observed 50 s+ on
+/// YouTube dialog), and a mixed-voice embedding merges everyone into one
+/// cluster — the standard fix (pyannote/VBx) is short uniform windows.
+const EMBED_WINDOW_MS: u64 = 2_000;
+/// A trailing remainder shorter than this merges into the previous window.
+const EMBED_WINDOW_MIN_MS: u64 = 800;
 /// Bound the retained segment set (a 4 h meeting stays well under this).
 const MAX_SEGMENTS: usize = 6_000;
 
@@ -591,16 +598,31 @@ impl DiarizerCore {
                 if end_ms.saturating_sub(start_ms) < MIN_SEGMENT_MS {
                     continue;
                 }
-                let embedding = match extractor
-                    .compute_speaker_embedding(segment.samples, TARGET_SAMPLE_RATE)
-                {
-                    Ok(e) => e,
-                    Err(e) => {
-                        log::warn!("speaker embedding failed: {e}");
-                        continue;
+                // Uniform sub-windows: one embedding per ~2 s so a long
+                // multi-speaker VAD segment yields per-voice embeddings.
+                let window = (EMBED_WINDOW_MS * TARGET_SAMPLE_RATE as u64 / 1000) as usize;
+                let min_window =
+                    (EMBED_WINDOW_MIN_MS * TARGET_SAMPLE_RATE as u64 / 1000) as usize;
+                let samples = &segment.samples;
+                let mut offset = 0usize;
+                while offset < samples.len() {
+                    let mut end = (offset + window).min(samples.len());
+                    // Absorb a short trailing remainder into this window.
+                    if samples.len() - end < min_window {
+                        end = samples.len();
                     }
-                };
-                sealed.push((start_ms, end_ms, embedding));
+                    let w_start_ms =
+                        start_ms + (offset as u64) * 1000 / TARGET_SAMPLE_RATE as u64;
+                    let w_end_ms = start_ms + (end as u64) * 1000 / TARGET_SAMPLE_RATE as u64;
+                    match extractor.compute_speaker_embedding(
+                        samples[offset..end].to_vec(),
+                        TARGET_SAMPLE_RATE,
+                    ) {
+                        Ok(e) => sealed.push((w_start_ms, w_end_ms, e)),
+                        Err(e) => log::warn!("speaker embedding failed: {e}"),
+                    }
+                    offset = end;
+                }
             }
         }
         for (start_ms, end_ms, embedding) in sealed {
