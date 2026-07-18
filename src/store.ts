@@ -22,6 +22,7 @@ interface SallyState {
   dict: Dict;
   status: string; // connecting | live | reconnecting | paused | ended | idle | storage-error
   statusDetail: string;
+  warning: string;
   entries: TimelineEntry[];
   partial: PartialEntry | null;
   review: ReviewInfo | null;
@@ -37,6 +38,7 @@ interface SallyState {
   setConfig: (c: RedactedConfig | null) => void;
   setUiLanguage: (l: UiLanguage) => void;
   setStatus: (state: string, detail: string) => void;
+  setWarning: (w: string) => void;
   addEntry: (e: TimelineEntry) => void;
   setPartial: (p: PartialEntry | null) => void;
   setReview: (r: ReviewInfo | null) => void;
@@ -55,6 +57,7 @@ export const useSally = create<SallyState>((set, get) => ({
   dict: dictionaries.en,
   status: "idle",
   statusDetail: "",
+  warning: "",
   entries: [],
   partial: null,
   review: null,
@@ -74,6 +77,7 @@ export const useSally = create<SallyState>((set, get) => ({
   setUiLanguage: (uiLanguage) =>
     set({ uiLanguage, dict: dictionaries[uiLanguage] }),
   setStatus: (status, statusDetail) => set({ status, statusDetail }),
+  setWarning: (warning) => set({ warning }),
   addEntry: (e) => set({ entries: [...get().entries, e] }),
   setPartial: (partial) => set({ partial }),
   setReview: (review) => set({ review }),
@@ -108,6 +112,7 @@ export const useSally = create<SallyState>((set, get) => ({
       pausedSince: null,
       status: "idle",
       statusDetail: "",
+      warning: "",
     }),
   setShowSettings: (showSettings) => set({ showSettings }),
 }));

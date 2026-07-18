@@ -64,9 +64,7 @@ pub async fn connect(
     // transcriptions of both directions, and translationConfig with a BCP-47
     // target. Source languages are auto-detected per passage, so meetings
     // mixing e.g. English + Japanese + Vietnamese need no per-language
-    // configuration. `echoTargetLanguage: true` keeps transcript text for
-    // passages already in the target language; the local readout gate
-    // decides separately whether their audio is played.
+    // configuration.
     //
     // No systemInstruction: the live-translate docs define only the fields
     // below, and translate models reject unknown/unsupported setup fields by
@@ -81,9 +79,15 @@ pub async fn connect(
             "model": format!("models/{model}"),
             "generationConfig": {
                 "responseModalities": ["AUDIO"],
+                // echoTargetLanguage false: the model stays silent for
+                // input already in the target language. This kills the
+                // readout feedback cascade at the source (our own played
+                // translation is target-language, so it triggers no new
+                // audio), and Sally fills the translation panel client-side
+                // for passages already in the target language.
                 "translationConfig": {
                     "targetLanguageCode": target_code,
-                    "echoTargetLanguage": true
+                    "echoTargetLanguage": false
                 }
             },
             "inputAudioTranscription": {},
