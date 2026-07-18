@@ -71,6 +71,7 @@ pub struct SettingsPayload {
     pub always_on_top: Option<bool>,
     pub mic_device: Option<String>,
     pub system_device: Option<String>,
+    pub capture_app: Option<String>,
     pub readout_enabled: Option<bool>,
 }
 
@@ -124,6 +125,9 @@ pub async fn save_settings(
     if let Some(v) = payload.system_device {
         cfg.system_device = v;
     }
+    if let Some(v) = payload.capture_app {
+        cfg.capture_app = v;
+    }
     if let Some(v) = payload.readout_enabled {
         cfg.readout_enabled = v;
     }
@@ -153,6 +157,25 @@ pub async fn get_api_key(state: State<'_, AppState>) -> Result<String> {
 pub struct AudioDevices {
     pub inputs: Vec<String>,
     pub outputs: Vec<String>,
+}
+
+/// Applications currently playing audio, for the per-app capture picker.
+/// Windows only; empty elsewhere.
+#[tauri::command]
+pub async fn list_audio_apps() -> Result<Vec<String>> {
+    #[cfg(windows)]
+    {
+        tokio::task::spawn_blocking(|| {
+            crate::audio::app_capture::list_audio_apps()
+                .into_iter()
+                .map(|a| a.name)
+                .collect()
+        })
+        .await
+        .map_err(|e| SallyError::Audio(e.to_string()))
+    }
+    #[cfg(not(windows))]
+    Ok(Vec::new())
 }
 
 #[tauri::command]

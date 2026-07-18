@@ -46,6 +46,7 @@ pub fn run() {
             commands::get_api_key,
             commands::save_settings,
             commands::list_audio_devices,
+            commands::list_audio_apps,
             commands::test_connectivity,
             commands::start_meeting,
             commands::pause_meeting,

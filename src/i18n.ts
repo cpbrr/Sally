@@ -93,6 +93,11 @@ const en = {
   micDevice: "Microphone",
   systemDevice: "System audio device",
   systemDefault: "System default",
+  captureSource: "Capture audio from",
+  entireSystem: "Entire system",
+  captureSourceHint:
+    "Pick the meeting app to capture only its audio. Sally's own read-aloud voice is then never captured, which removes echo. The app must be playing audio to appear in this list.",
+  refresh: "Refresh",
   diarization: "Speaker detection (diarization)",
   alwaysOnTopDefault: "Always on top by default",
   liveModel: "Live model",
@@ -195,6 +200,11 @@ const vi: typeof en = {
   micDevice: "Micrô",
   systemDevice: "Thiết bị âm thanh hệ thống",
   systemDefault: "Mặc định hệ thống",
+  captureSource: "Thu âm thanh từ",
+  entireSystem: "Toàn bộ hệ thống",
+  captureSourceHint:
+    "Chọn ứng dụng họp để chỉ thu âm thanh của nó. Giọng đọc bản dịch của Sally sẽ không bị thu lại, loại bỏ tiếng vọng. Ứng dụng phải đang phát âm thanh mới xuất hiện trong danh sách.",
+  refresh: "Làm mới",
   diarization: "Nhận diện người nói",
   alwaysOnTopDefault: "Luôn trên cùng theo mặc định",
   liveModel: "Mô hình trực tiếp",

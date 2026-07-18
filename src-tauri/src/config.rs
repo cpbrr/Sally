@@ -16,6 +16,7 @@ const KEY_LIVE_MODEL: &str = "SALLY_LIVE_MODEL";
 const KEY_CLEANUP_MODEL: &str = "SALLY_CLEANUP_MODEL";
 const KEY_TARGET_LANG: &str = "SALLY_TARGET_LANGUAGE";
 const KEY_UI_LANG: &str = "SALLY_UI_LANGUAGE";
+const KEY_CAPTURE_APP: &str = "SALLY_CAPTURE_APP";
 const KEY_VAD_MODEL_URL: &str = "SALLY_VAD_MODEL_URL";
 const KEY_SPEAKER_MODEL_URL: &str = "SALLY_SPEAKER_MODEL_URL";
 const KEY_ALWAYS_ON_TOP: &str = "SALLY_ALWAYS_ON_TOP";
@@ -39,6 +40,10 @@ pub struct AppConfig {
     pub always_on_top: bool,
     pub mic_device: String,
     pub system_device: String,
+    /// Capture system audio from a single application (executable name)
+    /// via process loopback instead of the whole device. Windows only;
+    /// empty = entire system.
+    pub capture_app: String,
     /// Read translated audio aloud for passages not already in the target
     /// language. Off by default.
     pub readout_enabled: bool,
@@ -65,6 +70,7 @@ impl AppConfig {
             always_on_top: false,
             mic_device: String::new(),
             system_device: String::new(),
+            capture_app: String::new(),
             readout_enabled: false,
             live_api_version: DEFAULT_LIVE_API_VERSION.into(),
             vad_model_url: String::new(),
@@ -121,6 +127,7 @@ impl AppConfig {
         cfg.always_on_top = get(KEY_ALWAYS_ON_TOP) != "off";
         cfg.mic_device = get(KEY_MIC_DEVICE);
         cfg.system_device = get(KEY_SYSTEM_DEVICE);
+        cfg.capture_app = get(KEY_CAPTURE_APP);
         cfg.readout_enabled = get(KEY_READOUT) == "on";
         cfg.vad_model_url = get(KEY_VAD_MODEL_URL);
         cfg.speaker_model_url = get(KEY_SPEAKER_MODEL_URL);
@@ -158,6 +165,7 @@ impl AppConfig {
         );
         map.insert(KEY_MIC_DEVICE.into(), self.mic_device.clone());
         map.insert(KEY_SYSTEM_DEVICE.into(), self.system_device.clone());
+        map.insert(KEY_CAPTURE_APP.into(), self.capture_app.clone());
         map.insert(
             KEY_READOUT.into(),
             if self.readout_enabled { "on" } else { "off" }.into(),
@@ -189,6 +197,7 @@ impl AppConfig {
             always_on_top: self.always_on_top,
             mic_device: self.mic_device.clone(),
             system_device: self.system_device.clone(),
+            capture_app: self.capture_app.clone(),
             readout_enabled: self.readout_enabled,
         }
     }
@@ -205,6 +214,7 @@ pub struct RedactedConfig {
     pub always_on_top: bool,
     pub mic_device: String,
     pub system_device: String,
+    pub capture_app: String,
     pub readout_enabled: bool,
 }
 

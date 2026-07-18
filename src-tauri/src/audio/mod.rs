@@ -5,6 +5,8 @@
 //! resamples both sources to Gemini's mono 16 kHz PCM, mixes them, and keeps
 //! only bounded in-memory buffers — audio never touches disk.
 
+#[cfg(windows)]
+pub mod app_capture;
 pub mod capture;
 pub mod pipeline;
 pub mod playback;

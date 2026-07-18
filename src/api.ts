@@ -14,6 +14,7 @@ export interface RedactedConfig {
   always_on_top: boolean;
   mic_device: string;
   system_device: string;
+  capture_app: string;
   readout_enabled: boolean;
 }
 
@@ -33,6 +34,7 @@ export interface SettingsPayload {
   always_on_top?: boolean;
   mic_device?: string;
   system_device?: string;
+  capture_app?: string;
   readout_enabled?: boolean;
 }
 
@@ -76,6 +78,7 @@ export const api = {
   saveSettings: (payload: SettingsPayload) =>
     invoke<RedactedConfig>("save_settings", { payload }),
   listAudioDevices: () => invoke<AudioDevices>("list_audio_devices"),
+  listAudioApps: () => invoke<string[]>("list_audio_apps"),
   testConnectivity: () => invoke<boolean>("test_connectivity"),
   startMeeting: (targetLanguage?: string) =>
     invoke<void>("start_meeting", { targetLanguage: targetLanguage ?? null }),
