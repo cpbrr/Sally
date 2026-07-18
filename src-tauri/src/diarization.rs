@@ -28,10 +28,11 @@ const FB_SPEECH_RMS: f32 = 0.010;
 const FB_JOIN_SIMILARITY: f32 = 0.86;
 const FB_CONFIDENT_SIMILARITY: f32 = 0.55;
 
-// sherpa speaker-embedding tuning (WeSpeaker CAM++ cosine scores: same
-// speaker typically 0.5–0.8, different speakers 0.05–0.3).
+// sherpa speaker-embedding tuning, calibrated against TitaNet-small on
+// known-speaker audio: same-speaker cosine ≈ 0.73, different-speaker
+// ≈ 0.15–0.19. The join threshold sits in the wide gap between the two.
 const SHERPA_JOIN_SIMILARITY: f32 = 0.45;
-const SHERPA_CONFIDENT_SIMILARITY: f32 = 0.25;
+const SHERPA_CONFIDENT_SIMILARITY: f32 = 0.20;
 const MAX_CLUSTERS: usize = 8;
 /// Segments shorter than this yield unreliable embeddings and may never
 /// seed a new speaker (they can still join existing ones).
@@ -939,6 +940,52 @@ mod tests {
         assert_eq!(clock.to_ms(1600), 100);
         assert_eq!(clock.to_ms(3200), 5200);
         assert_eq!(clock.to_ms(4000), 5250);
+    }
+
+    /// Ground-truth check of the sherpa embedding path with real speaker
+    /// audio. Run explicitly:
+    /// `SALLY_TEST_MODEL=<path to speaker onnx> SALLY_TEST_WAVS=<sr-data dir> cargo test verify_embedding -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn verify_embedding_discrimination() {
+        let model = std::env::var("SALLY_TEST_MODEL").expect("SALLY_TEST_MODEL");
+        let wavs = std::path::PathBuf::from(
+            std::env::var("SALLY_TEST_WAVS").expect("SALLY_TEST_WAVS"),
+        );
+        let mut extractor = sherpa_rs::speaker_id::EmbeddingExtractor::new(
+            sherpa_rs::speaker_id::ExtractorConfig {
+                model,
+                ..Default::default()
+            },
+        )
+        .expect("extractor");
+        let mut embed = |name: &str| -> Vec<f32> {
+            let (samples, rate) =
+                sherpa_rs::read_audio_file(&wavs.join(name).to_string_lossy())
+                    .expect("read wav");
+            let mut e = extractor
+                .compute_speaker_embedding(samples, rate)
+                .expect("embedding");
+            normalize(&mut e);
+            e
+        };
+        let f1 = embed("enroll/fangjun-sr-1.wav");
+        let f2 = embed("enroll/fangjun-sr-2.wav");
+        let l1 = embed("enroll/leijun-sr-1.wav");
+        let d1 = embed("enroll/liudehua-sr-1.wav");
+        let same = cosine(&f1, &f2);
+        let diff1 = cosine(&f1, &l1);
+        let diff2 = cosine(&f1, &d1);
+        let diff3 = cosine(&l1, &d1);
+        println!("same-speaker sim: {same:.3}");
+        println!("diff-speaker sims: {diff1:.3} {diff2:.3} {diff3:.3}");
+        assert!(same > 0.5, "same-speaker similarity too low: {same}");
+        assert!(
+            diff1 < SHERPA_JOIN_SIMILARITY
+                && diff2 < SHERPA_JOIN_SIMILARITY
+                && diff3 < SHERPA_JOIN_SIMILARITY,
+            "different-speaker similarity above join threshold"
+        );
     }
 
     #[test]
