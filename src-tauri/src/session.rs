@@ -183,10 +183,13 @@ async fn run_session(
         );
     }
     // Speaker-change tracking: when the diarizer completes a segment with a
-    // new label, the open entry is finalized so each entry stays single-
-    // speaker instead of one giant turn absorbing everyone.
+    // new *concrete* speaker label, the open entry's original is frozen so
+    // entries stay single-speaker. Meeting/Multiple-speakers transitions do
+    // not split — that caused mid-sentence cuts.
     let mut ranges_seen = 0usize;
-    let mut last_speaker: Option<crate::diarization::SpeakerLabel> = None;
+    let mut last_concrete_speaker: Option<u32> = None;
+    /// Don't split entries with fewer original characters than this.
+    const MIN_SPLIT_CHARS: usize = 12;
     let mut speakers: BTreeSet<String> = BTreeSet::new();
     let mut paused = false;
     let mut last_chunk_ms: u64 = 0;
@@ -291,18 +294,30 @@ async fn run_session(
                         last_playback_at = Some(Instant::now());
                     } else {
                         diarizer.push_chunk(&chunk.system, chunk.t_ms);
-                        // Split the open entry when the speaker changes.
+                        // Split the open entry when a new concrete speaker
+                        // appears. The original freezes; its translation
+                        // keeps streaming into the closing entry.
                         if let Some((count, label)) = diarizer.latest_range() {
                             if count > ranges_seen {
                                 ranges_seen = count;
-                                if last_speaker.as_ref() != Some(&label)
-                                    && assembler.partial().is_some()
-                                {
-                                    finalize_entry(&app, &mut assembler, &diarizer, &mut store,
-                                                   &config, &mut speakers);
-                                    last_fragment_ms = 0;
+                                if let crate::diarization::SpeakerLabel::Speaker(n) = label {
+                                    let changed = last_concrete_speaker
+                                        .map(|prev| prev != n)
+                                        .unwrap_or(false);
+                                    if changed
+                                        && assembler.open_original_len() >= MIN_SPLIT_CHARS
+                                    {
+                                        if let Some(sealed) = assembler
+                                            .split_for_speaker_change(
+                                                Some(&diarizer as &dyn SpeakerLookup),
+                                            )
+                                        {
+                                            emit_sealed(&app, sealed, &mut store,
+                                                        &config, &mut speakers);
+                                        }
+                                    }
+                                    last_concrete_speaker = Some(n);
                                 }
-                                last_speaker = Some(label);
                             }
                         }
                     }
@@ -357,8 +372,10 @@ async fn run_session(
                         // fragments while (or just after) the translated
                         // voice was audible are the played translation
                         // coming back through loopback capture.
+                        // Wide window: the echo's own transcription can trail
+                        // the played audio by several seconds.
                         let echo_window = last_playback_at
-                            .map(|t| t.elapsed() < Duration::from_millis(1500))
+                            .map(|t| t.elapsed() < Duration::from_millis(4000))
                             .unwrap_or(false);
                         if echo_window
                             && crate::lang::detect(&text)
@@ -508,6 +525,28 @@ fn play(player: &mut Option<Player>, readout_enabled: &mut bool, samples: &[i16]
     }
 }
 
+/// Post-process and persist one sealed entry.
+fn emit_sealed(
+    app: &AppHandle,
+    mut entry: crate::timeline::TimelineEntry,
+    store: &mut MeetingStore,
+    config: &AppConfig,
+    speakers: &mut BTreeSet<String>,
+) {
+    // echoTargetLanguage=false means passages already in the target
+    // language get no model translation; mirror the original so the
+    // translation panel stays complete.
+    if entry.translated.is_empty()
+        && crate::lang::detect(&entry.original)
+            .map(|l| l == crate::lang::bcp47(&config.target_language))
+            .unwrap_or(false)
+    {
+        entry.translated = entry.original.clone();
+    }
+    speakers.insert(entry.speaker.clone());
+    append_and_emit(app, store, config, &entry);
+}
+
 fn finalize_entry(
     app: &AppHandle,
     assembler: &mut Assembler,
@@ -516,19 +555,8 @@ fn finalize_entry(
     config: &AppConfig,
     speakers: &mut BTreeSet<String>,
 ) {
-    if let Some(mut entry) = assembler.finalize_turn(Some(diarizer as &dyn SpeakerLookup)) {
-        // echoTargetLanguage=false means passages already in the target
-        // language get no model translation; mirror the original so the
-        // translation panel stays complete.
-        if entry.translated.is_empty()
-            && crate::lang::detect(&entry.original)
-                .map(|l| l == crate::lang::bcp47(&config.target_language))
-                .unwrap_or(false)
-        {
-            entry.translated = entry.original.clone();
-        }
-        speakers.insert(entry.speaker.clone());
-        append_and_emit(app, store, config, &entry);
+    for entry in assembler.finalize_turn(Some(diarizer as &dyn SpeakerLookup)) {
+        emit_sealed(app, entry, store, config, speakers);
     }
 }
 
