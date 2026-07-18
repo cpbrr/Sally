@@ -1,7 +1,7 @@
 // Stacked Transcript / Live Translation panels with draggable divider and
 // follow-live scrolling (design §6.1–6.2).
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { formatTimestamp, TimelineEntry } from "../api";
 import { useSally } from "../store";
 
@@ -105,35 +105,31 @@ function Panel({
 export function Panels() {
   const { dict } = useSally();
   const [ratio, setRatio] = useState(() => {
-    const saved = localStorage.getItem("sally.split");
-    return saved ? Number(saved) : 0.5;
+    const saved = Number(localStorage.getItem("sally.split"));
+    return Number.isFinite(saved) && saved >= 0.15 && saved <= 0.85 ? saved : 0.5;
   });
   const containerRef = useRef<HTMLDivElement>(null);
-  const dragging = useRef(false);
 
-  useEffect(() => {
-    const move = (e: MouseEvent) => {
-      if (!dragging.current || !containerRef.current) return;
-      const rect = containerRef.current.getBoundingClientRect();
-      const r = Math.min(0.85, Math.max(0.15, (e.clientY - rect.top) / rect.height));
-      setRatio(r);
-    };
-    const up = () => {
-      if (dragging.current) {
-        dragging.current = false;
-        setRatio((r) => {
-          localStorage.setItem("sally.split", String(r));
-          return r;
-        });
-      }
-    };
-    window.addEventListener("mousemove", move);
-    window.addEventListener("mouseup", up);
-    return () => {
-      window.removeEventListener("mousemove", move);
-      window.removeEventListener("mouseup", up);
-    };
-  }, []);
+  // Pointer capture keeps drags smooth even when the cursor leaves the
+  // divider or the window; no global listeners to get stuck.
+  const onDividerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onDividerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect || rect.height === 0) return;
+    setRatio(Math.min(0.85, Math.max(0.15, (e.clientY - rect.top) / rect.height)));
+  };
+  const onDividerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+      setRatio((r) => {
+        localStorage.setItem("sally.split", String(r));
+        return r;
+      });
+    }
+  };
 
   return (
     <div className="panels" ref={containerRef}>
@@ -142,9 +138,10 @@ export function Panels() {
       </div>
       <div
         className="divider"
-        onMouseDown={() => {
-          dragging.current = true;
-        }}
+        onPointerDown={onDividerDown}
+        onPointerMove={onDividerMove}
+        onPointerUp={onDividerUp}
+        onPointerCancel={onDividerUp}
       />
       <div style={{ flex: 1 - ratio, display: "flex", minHeight: 60 }}>
         <Panel title={dict.liveTranslation} mode="translated" />

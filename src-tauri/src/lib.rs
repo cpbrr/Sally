@@ -51,6 +51,7 @@ pub fn run() {
             commands::resume_meeting,
             commands::set_readout,
             commands::end_meeting,
+            commands::get_last_meeting,
             commands::apply_review,
             commands::export_without_timestamps,
             commands::clean_and_summarize,

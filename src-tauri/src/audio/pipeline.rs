@@ -110,6 +110,7 @@ impl Pipeline {
             .map(|(a, b)| f32_to_i16((a + b).clamp(-1.0, 1.0)))
             .collect();
         let system_i16: Vec<i16> = system.iter().map(|&s| f32_to_i16(s)).collect();
+        let mic_i16: Vec<i16> = mic.iter().map(|&s| f32_to_i16(s)).collect();
 
         let chunk_ms = (CHUNK_SAMPLES as u64 * 1000) / TARGET_SAMPLE_RATE as u64;
         let t_ms = self.start_t_ms.unwrap_or(0) + self.seq * chunk_ms;
@@ -118,6 +119,7 @@ impl Pipeline {
             t_ms,
             mixed,
             system: system_i16,
+            mic: mic_i16,
             mic_active: mic_rms > MIC_ACTIVITY_RMS,
         };
         self.seq += 1;

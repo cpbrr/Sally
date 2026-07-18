@@ -1,7 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import { TARGET_LANGUAGES } from "../i18n";
 import { useSally } from "../store";
 
 const STATUS_KEYS: Record<string, string> = {
@@ -15,7 +14,7 @@ const STATUS_KEYS: Record<string, string> = {
 };
 
 export function TitleBar() {
-  const { dict, status, config, phase, setConfig, setShowSettings } =
+  const { dict, status, config, setConfig, showSettings, setShowSettings } =
     useSally();
   const [pinned, setPinned] = useState(config?.always_on_top ?? false);
 
@@ -31,11 +30,6 @@ export function TitleBar() {
     const next = !pinned;
     setPinned(next);
     await getCurrentWindow().setAlwaysOnTop(next);
-  };
-
-  const changeTarget = async (lang: string) => {
-    const updated = await api.saveSettings({ target_language: lang });
-    setConfig(updated);
   };
 
   const toggleReadout = async () => {
@@ -60,19 +54,6 @@ export function TitleBar() {
         <span className={`status-dot ${status}`} />
         <span className="status-text">{statusLabel}</span>
       </div>
-      <select
-        className="lang-select"
-        title={dict.targetLanguage}
-        value={config?.target_language ?? "Vietnamese"}
-        disabled={phase === "live"}
-        onChange={(e) => changeTarget(e.target.value)}
-      >
-        {TARGET_LANGUAGES.map((l) => (
-          <option key={l} value={l}>
-            {l}
-          </option>
-        ))}
-      </select>
       <button
         className={`icon-btn ${config?.readout_enabled ? "active" : ""}`}
         title={config?.readout_enabled ? dict.readoutOff : dict.readoutOn}
@@ -88,9 +69,9 @@ export function TitleBar() {
         {pinned ? "📌" : "📍"}
       </button>
       <button
-        className="icon-btn"
+        className={`icon-btn ${showSettings ? "active" : ""}`}
         title={dict.settings}
-        onClick={() => setShowSettings(true)}
+        onClick={() => setShowSettings(!showSettings)}
       >
         ⚙
       </button>
