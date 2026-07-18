@@ -25,6 +25,7 @@ export function SessionBar() {
     statusDetail,
     review,
     meetingEndedAt,
+    warning,
     setPhase,
     setPaused,
     setReview,
@@ -140,13 +141,17 @@ export function SessionBar() {
         <span className="spacer" />
         {error ? (
           <span className="error-text">{error}</span>
+        ) : (status === "reconnecting" || status === "storage-error") &&
+          statusDetail ? (
+          <span className="error-text" title={statusDetail}>
+            {statusDetail.length > 60
+              ? statusDetail.slice(0, 60) + "…"
+              : statusDetail}
+          </span>
         ) : (
-          (status === "reconnecting" || status === "storage-error") &&
-          statusDetail && (
-            <span className="error-text" title={statusDetail}>
-              {statusDetail.length > 60
-                ? statusDetail.slice(0, 60) + "…"
-                : statusDetail}
+          warning && (
+            <span className="warn-text" title={warning}>
+              {warning.length > 60 ? warning.slice(0, 60) + "…" : warning}
             </span>
           )
         )}

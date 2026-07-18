@@ -18,8 +18,9 @@ use std::time::{Duration, Instant};
 
 /// Gemini Live output audio rate.
 const SOURCE_RATE: u32 = 24_000;
-/// Cap queued playback at 60 s of device-rate audio.
-const MAX_QUEUED_SECONDS: usize = 60;
+/// Cap queued playback at 15 s of device-rate audio: readout naturally lags
+/// live speech, and a long backlog is worse than dropping stale audio.
+const MAX_QUEUED_SECONDS: usize = 15;
 
 /// Speaker-echo grace period: capture keeps hearing the tail of played audio
 /// briefly after the queue drains.

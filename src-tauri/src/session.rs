@@ -176,7 +176,17 @@ async fn run_session(
     let mut diarizer = DiarizerHandle::spawn(models);
     if !diarizer.sherpa_active {
         log::warn!("diarization running on the fallback backend (models unavailable)");
+        let _ = app.emit(
+            "sally://warning",
+            "Speaker models unavailable — using basic speaker detection. \
+             Check your connection and restart the meeting to retry the download.",
+        );
     }
+    // Speaker-change tracking: when the diarizer completes a segment with a
+    // new label, the open entry is finalized so each entry stays single-
+    // speaker instead of one giant turn absorbing everyone.
+    let mut ranges_seen = 0usize;
+    let mut last_speaker: Option<crate::diarization::SpeakerLabel> = None;
     let mut speakers: BTreeSet<String> = BTreeSet::new();
     let mut paused = false;
     let mut last_chunk_ms: u64 = 0;
@@ -190,6 +200,10 @@ async fn run_session(
     let mut readout_enabled = config.readout_enabled;
     let mut gate = ReadoutGate::new(&target_code);
     let mut player: Option<Player> = None;
+    // Last moment readout audio was audible; original-transcription
+    // fragments in this window that are already target-language are our own
+    // played translation coming back through loopback, and are dropped.
+    let mut last_playback_at: Option<Instant> = None;
 
     emit_status(&app, "connecting", "");
     let mut conn: Option<live::LiveConnection> = None;
@@ -259,23 +273,43 @@ async fn run_session(
                 pipeline.push(frame);
                 while let Some(chunk) = pipeline.next_chunk() {
                     last_chunk_ms = chunk.t_ms;
-                    // While readout audio is playing, system audio contains
-                    // our own spoken translation (loopback). Feeding it back
-                    // would translate the translation in a loop — send
-                    // microphone-only audio and skip diarization until the
-                    // playback (plus a short tail) has finished.
+                    // While readout audio is playing, system audio also
+                    // contains our own spoken translation (loopback). Audio
+                    // still flows to Gemini uninterrupted — muting it made
+                    // the whole pipeline stall until playback finished. The
+                    // echo is neutralized downstream instead:
+                    // echoTargetLanguage=false keeps the model silent for
+                    // it, and target-language transcription fragments inside
+                    // the playback window are dropped. Only diarization
+                    // skips these chunks (the synthetic voice must not
+                    // become a cluster).
                     let readout_playing = player
                         .as_mut()
                         .map(|p| p.is_active())
                         .unwrap_or(false);
-                    if !readout_playing {
+                    if readout_playing {
+                        last_playback_at = Some(Instant::now());
+                    } else {
                         diarizer.push_chunk(&chunk.system, chunk.t_ms);
+                        // Split the open entry when the speaker changes.
+                        if let Some((count, label)) = diarizer.latest_range() {
+                            if count > ranges_seen {
+                                ranges_seen = count;
+                                if last_speaker.as_ref() != Some(&label)
+                                    && assembler.partial().is_some()
+                                {
+                                    finalize_entry(&app, &mut assembler, &diarizer, &mut store,
+                                                   &config, &mut speakers);
+                                    last_fragment_ms = 0;
+                                }
+                                last_speaker = Some(label);
+                            }
+                        }
                     }
                     assembler.push_activity(chunk.mic_active, chunk.system_active, chunk.t_ms);
                     if let Some(c) = conn.as_ref() {
-                        let payload = if readout_playing { chunk.mic } else { chunk.mixed };
                         // try_send: a stalled socket must not block audio.
-                        if c.audio_tx.try_send(payload).is_err() {
+                        if c.audio_tx.try_send(chunk.mixed).is_err() {
                             log::warn!("live audio queue full; dropping chunk {}", chunk.seq);
                         }
                     }
@@ -319,6 +353,20 @@ async fn run_session(
                         }
                     }
                     Some(LiveEvent::Original(text)) => {
+                        // Drop our own readout echo: target-language
+                        // fragments while (or just after) the translated
+                        // voice was audible are the played translation
+                        // coming back through loopback capture.
+                        let echo_window = last_playback_at
+                            .map(|t| t.elapsed() < Duration::from_millis(1500))
+                            .unwrap_or(false);
+                        if echo_window
+                            && crate::lang::detect(&text)
+                                .map(|l| l == target_code)
+                                .unwrap_or(false)
+                        {
+                            continue;
+                        }
                         assembler.push_original(&text, last_chunk_ms);
                         last_fragment_ms = last_chunk_ms;
                         emit_partial(&app, &assembler);
@@ -468,7 +516,17 @@ fn finalize_entry(
     config: &AppConfig,
     speakers: &mut BTreeSet<String>,
 ) {
-    if let Some(entry) = assembler.finalize_turn(Some(diarizer as &dyn SpeakerLookup)) {
+    if let Some(mut entry) = assembler.finalize_turn(Some(diarizer as &dyn SpeakerLookup)) {
+        // echoTargetLanguage=false means passages already in the target
+        // language get no model translation; mirror the original so the
+        // translation panel stays complete.
+        if entry.translated.is_empty()
+            && crate::lang::detect(&entry.original)
+                .map(|l| l == crate::lang::bcp47(&config.target_language))
+                .unwrap_or(false)
+        {
+            entry.translated = entry.original.clone();
+        }
         speakers.insert(entry.speaker.clone());
         append_and_emit(app, store, config, &entry);
     }

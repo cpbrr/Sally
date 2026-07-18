@@ -205,6 +205,11 @@ impl ClusterEngine {
     }
 
     pub fn assign(&mut self, embedding: &[f32]) -> (SpeakerLabel, f32) {
+        // Normalize so centroid averaging is not biased toward loud/long
+        // segments (raw model embeddings are not unit-length).
+        let mut embedding = embedding.to_vec();
+        normalize(&mut embedding);
+        let embedding = &embedding[..];
         let mut best: Option<(usize, f32)> = None;
         for (i, c) in self.clusters.iter().enumerate() {
             let sim = cosine(embedding, &c.centroid);
@@ -301,12 +306,15 @@ pub struct DiarizerCore {
 
 impl DiarizerCore {
     fn new_sherpa(paths: &ModelPaths, ranges: Arc<Mutex<Vec<SpeakerRange>>>) -> anyhow::Result<Self> {
+        // Short max-speech and silence windows: long VAD segments span
+        // multiple speakers and produce one mixed embedding, which is what
+        // made every voice cluster into "Speaker 1".
         let vad_config = sherpa_rs::silero_vad::SileroVadConfig {
             model: paths.vad.to_string_lossy().into_owned(),
             threshold: 0.5,
-            min_silence_duration: 0.5,
+            min_silence_duration: 0.35,
             min_speech_duration: 0.25,
-            max_speech_duration: 30.0,
+            max_speech_duration: 8.0,
             sample_rate: TARGET_SAMPLE_RATE,
             window_size: 512,
             ..Default::default()
@@ -543,6 +551,13 @@ impl DiarizerHandle {
         if let Some(tx) = &self.tx {
             let _ = tx.send(DiarCmd::Chunk(samples.to_vec(), t_ms));
         }
+    }
+
+    /// (completed range count, label of the newest range). The session uses
+    /// this to split the open timeline entry when the speaker changes.
+    pub fn latest_range(&self) -> Option<(usize, SpeakerLabel)> {
+        let ranges = self.ranges.lock().unwrap();
+        ranges.last().map(|r| (ranges.len(), r.label.clone()))
     }
 
     /// Close the open segment and wait for the thread to drain.

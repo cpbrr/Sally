@@ -322,7 +322,17 @@ input[type="range"] {
 .check { flex-direction: row !important; align-items: center; gap: 6px; }
 
 .error-text { color: var(--danger); font-size: 12px; }
+.warn-text { color: var(--warn); font-size: 12px; }
 .ok-text { color: var(--ok); font-size: 12px; }
+
+.session-bar .warn-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
 
 .speaker-row {
   display: flex;

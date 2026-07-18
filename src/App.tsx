@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, onEntry, onPartial, onStatus } from "./api";
+import { api, onEntry, onPartial, onStatus, onWarning } from "./api";
 import { Panels } from "./components/Panels";
 import { ProcessingScreen, SavedPopup } from "./components/Processing";
 import { SessionBar } from "./components/SessionBar";
@@ -69,6 +69,7 @@ export default function App() {
     setConfig,
     setPendingRecoveries,
     setStatus,
+    setWarning,
     addEntry,
     setPartial,
     setPaused,
@@ -89,6 +90,7 @@ export default function App() {
       }),
       onEntry((e) => addEntry(e)),
       onPartial((p) => setPartial(p)),
+      onWarning((w) => setWarning(w)),
     ];
 
     api

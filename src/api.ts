@@ -112,6 +112,10 @@ export function onStatus(cb: (s: StatusPayload) => void): Promise<UnlistenFn> {
   return listen<StatusPayload>("sally://status", (ev) => cb(ev.payload));
 }
 
+export function onWarning(cb: (message: string) => void): Promise<UnlistenFn> {
+  return listen<string>("sally://warning", (ev) => cb(ev.payload));
+}
+
 export function formatTimestamp(ms: number): string {
   const totalS = Math.floor(ms / 1000);
   const h = Math.floor(totalS / 3600);
