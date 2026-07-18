@@ -13,8 +13,11 @@ use std::collections::VecDeque;
 /// stalls, the oldest audio is dropped (bounded memory, design §4.2).
 const MAX_BUFFERED_SAMPLES: usize = TARGET_SAMPLE_RATE as usize * 10;
 
-/// RMS threshold above which a mic chunk counts as active speech energy.
-const MIC_ACTIVITY_RMS: f32 = 0.012;
+/// RMS threshold above which a chunk counts as active speech energy.
+/// Kept low: quiet laptop microphones still need to register as "you
+/// speaking" for speaker attribution.
+const MIC_ACTIVITY_RMS: f32 = 0.008;
+const SYSTEM_ACTIVITY_RMS: f32 = 0.008;
 
 struct SourceLane {
     resampler: LinearResampler,
@@ -103,6 +106,8 @@ impl Pipeline {
         let system = self.system.take_chunk();
         let mic_rms =
             (mic.iter().map(|s| s * s).sum::<f32>() / mic.len().max(1) as f32).sqrt();
+        let system_rms =
+            (system.iter().map(|s| s * s).sum::<f32>() / system.len().max(1) as f32).sqrt();
 
         let mixed: Vec<i16> = mic
             .iter()
@@ -121,6 +126,7 @@ impl Pipeline {
             system: system_i16,
             mic: mic_i16,
             mic_active: mic_rms > MIC_ACTIVITY_RMS,
+            system_active: system_rms > SYSTEM_ACTIVITY_RMS,
         };
         self.seq += 1;
         Some(chunk)

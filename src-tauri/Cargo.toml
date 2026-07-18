@@ -1,6 +1,6 @@
 [package]
 name = "sally"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Floating live translation and transcription for meetings"
 license = "MIT"
@@ -24,6 +24,8 @@ tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 cpal = "0.15"
+# Speaker diarization: silero VAD + speaker embeddings via sherpa-onnx.
+sherpa-rs = "0.6"
 anyhow = "1"
 thiserror = "2"
 chrono = { version = "0.4", features = ["serde"] }

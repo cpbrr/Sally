@@ -10,6 +10,7 @@ const en = {
   statusEnded: "Ended",
   statusIdle: "Ready",
   statusStorageError: "Storage problem",
+  statusDownloadingModels: "Downloading speaker models…",
   // title bar
   pin: "Keep on top",
   unpin: "Stop keeping on top",
@@ -118,6 +119,7 @@ const vi: typeof en = {
   statusEnded: "Đã kết thúc",
   statusIdle: "Sẵn sàng",
   statusStorageError: "Lỗi lưu trữ",
+  statusDownloadingModels: "Đang tải mô hình nhận diện giọng…",
   pin: "Giữ trên cùng",
   unpin: "Bỏ giữ trên cùng",
   readoutOn: "Đọc to bản dịch (bỏ qua lời nói đã ở ngôn ngữ đích)",

@@ -64,13 +64,17 @@ readout is captured back by loopback and re-enters the pipeline.
   ScreenCaptureKit system-audio adapter is not implemented yet
   (`src-tauri/src/audio/capture.rs`), and signing/notarization is pending.
 
-## Diarization models
+## Diarization
 
-Speaker labels are best-effort and local (design §7). The production ONNX
-VAD/speaker-embedding models are still to be selected; they plug in through
-the `EmbeddingExtractor` trait in `src-tauri/src/diarization.rs`. Until then
-a built-in spectral-band profile provides coarse separation, and diarization
-can be disabled in Settings.
+Speaker labels are best-effort and local (design §7), always on. Sally uses
+sherpa-onnx: silero VAD segments remote speech and a 3D-Speaker ERes2Net
+embedding model feeds online clustering. The two model files (~28 MB)
+download automatically on the first meeting into `<data folder>/models/`;
+URLs are overridable in `.env`. Without the models (offline first run) a
+coarse built-in fallback keeps meetings working.
+
+Building from source needs libclang for bindgen (`winget install LLVM.LLVM`
+on Windows, `brew install llvm` on macOS; set `LIBCLANG_PATH` accordingly).
 
 ## Privacy
 

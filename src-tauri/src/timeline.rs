@@ -5,7 +5,7 @@
 //! stable timeline entries. Entries are provisional while a turn is open and
 //! final once the turn completes; finalized entries never change.
 
-use crate::diarization::{Diarizer, SpeakerLabel};
+use crate::diarization::{SpeakerLabel, SpeakerLookup};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -38,7 +38,10 @@ pub struct PartialEntry {
 pub struct Assembler {
     next_index: u64,
     open: Option<OpenEntry>,
-    /// Fraction of chunks with mic energy needed to attribute a turn to `You`.
+    /// Fraction of *speech-active* chunks with mic energy needed to
+    /// attribute a turn to `You`. Measured against chunks where anyone was
+    /// speaking, so long silences no longer dilute the ratio (which used to
+    /// merge the user's own speech into remote labels).
     mic_attribution_threshold: f32,
 }
 
@@ -48,7 +51,7 @@ struct OpenEntry {
     original: String,
     translated: String,
     mic_active_chunks: u32,
-    total_chunks: u32,
+    speech_chunks: u32,
 }
 
 impl Assembler {
@@ -56,7 +59,7 @@ impl Assembler {
         Self {
             next_index: 0,
             open: None,
-            mic_attribution_threshold: 0.4,
+            mic_attribution_threshold: 0.5,
         }
     }
 
@@ -67,7 +70,7 @@ impl Assembler {
             original: String::new(),
             translated: String::new(),
             mic_active_chunks: 0,
-            total_chunks: 0,
+            speech_chunks: 0,
         })
     }
 
@@ -83,11 +86,15 @@ impl Assembler {
         e.last_ms = e.last_ms.max(t_ms);
     }
 
-    /// Mic-activity signal from the pipeline, once per mixed chunk.
-    pub fn push_mic_activity(&mut self, active: bool, _t_ms: u64) {
+    /// Speech-activity signal from the pipeline, once per mixed chunk.
+    /// Only chunks where someone (mic or system) is speaking count toward
+    /// speaker attribution.
+    pub fn push_activity(&mut self, mic_active: bool, system_active: bool, _t_ms: u64) {
         if let Some(e) = self.open.as_mut() {
-            e.total_chunks += 1;
-            if active {
+            if mic_active || system_active {
+                e.speech_chunks += 1;
+            }
+            if mic_active {
                 e.mic_active_chunks += 1;
             }
         }
@@ -103,13 +110,13 @@ impl Assembler {
     }
 
     /// Finalize the open entry (turn complete, forced flush, or meeting end).
-    pub fn finalize_turn(&mut self, diarizer: Option<&Diarizer>) -> Option<TimelineEntry> {
+    pub fn finalize_turn(&mut self, diarizer: Option<&dyn SpeakerLookup>) -> Option<TimelineEntry> {
         let e = self.open.take()?;
         if e.original.trim().is_empty() && e.translated.trim().is_empty() {
             return None;
         }
-        let mic_fraction = if e.total_chunks > 0 {
-            e.mic_active_chunks as f32 / e.total_chunks as f32
+        let mic_fraction = if e.speech_chunks > 0 {
+            e.mic_active_chunks as f32 / e.speech_chunks as f32
         } else {
             0.0
         };
@@ -192,10 +199,39 @@ mod tests {
         let mut a = Assembler::new();
         a.push_original("my words", 0);
         for _ in 0..10 {
-            a.push_mic_activity(true, 0);
+            a.push_activity(true, false, 0);
         }
         let e = a.finalize_turn(None).expect("entry");
         assert_eq!(e.speaker, "You");
+    }
+
+    #[test]
+    fn silence_does_not_dilute_mic_attribution() {
+        let mut a = Assembler::new();
+        a.push_original("my words", 0);
+        // 6 chunks of me speaking, then 30 chunks of dead air: still You.
+        for _ in 0..6 {
+            a.push_activity(true, false, 0);
+        }
+        for _ in 0..30 {
+            a.push_activity(false, false, 0);
+        }
+        let e = a.finalize_turn(None).expect("entry");
+        assert_eq!(e.speaker, "You");
+    }
+
+    #[test]
+    fn remote_dominated_turn_is_not_you() {
+        let mut a = Assembler::new();
+        a.push_original("their words", 0);
+        for _ in 0..2 {
+            a.push_activity(true, false, 0);
+        }
+        for _ in 0..10 {
+            a.push_activity(false, true, 0);
+        }
+        let e = a.finalize_turn(None).expect("entry");
+        assert_eq!(e.speaker, "Meeting");
     }
 
     #[test]

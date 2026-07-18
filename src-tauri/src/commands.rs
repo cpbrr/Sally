@@ -9,7 +9,7 @@ use crate::store::MeetingStore;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex;
 
 #[derive(Default)]
@@ -68,7 +68,6 @@ pub struct SettingsPayload {
     pub cleanup_model: Option<String>,
     pub target_language: Option<String>,
     pub ui_language: Option<String>,
-    pub diarization_enabled: Option<bool>,
     pub always_on_top: Option<bool>,
     pub mic_device: Option<String>,
     pub system_device: Option<String>,
@@ -115,9 +114,6 @@ pub async fn save_settings(
     }
     if let Some(v) = payload.ui_language {
         cfg.ui_language = v;
-    }
-    if let Some(v) = payload.diarization_enabled {
-        cfg.diarization_enabled = v;
     }
     if let Some(v) = payload.always_on_top {
         cfg.always_on_top = v;
@@ -217,7 +213,32 @@ pub async fn start_meeting(
             *state.config.lock().await = Some(cfg.clone());
         }
     }
-    let handle = crate::session::start(app, cfg)?;
+    // Diarization models (silero VAD + speaker embedding): download once on
+    // first meeting (~28 MB). If that fails (offline), the session falls
+    // back to the built-in diarizer rather than blocking the meeting.
+    let models = match crate::models::existing_models(&cfg.data_dir) {
+        Some(m) => Some(m),
+        None => {
+            let _ = app.emit(
+                "sally://status",
+                serde_json::json!({ "state": "downloading-models", "detail": "" }),
+            );
+            match crate::models::ensure_models(
+                &cfg.data_dir,
+                &cfg.vad_model_url,
+                &cfg.speaker_model_url,
+            )
+            .await
+            {
+                Ok(m) => Some(m),
+                Err(e) => {
+                    log::error!("diarization model download failed: {e}");
+                    None
+                }
+            }
+        }
+    };
+    let handle = crate::session::start(app, cfg, models)?;
     *session_guard = Some(handle);
     Ok(())
 }

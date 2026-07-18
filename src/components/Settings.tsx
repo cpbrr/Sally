@@ -27,7 +27,6 @@ export function Settings() {
     data_dir: config?.data_dir ?? "",
     mic_device: config?.mic_device ?? "",
     system_device: config?.system_device ?? "",
-    diarization_enabled: config?.diarization_enabled ?? true,
     always_on_top: config?.always_on_top ?? false,
     readout_enabled: config?.readout_enabled ?? false,
     live_model: config?.live_model ?? "",
@@ -172,17 +171,6 @@ export function Settings() {
               </option>
             ))}
           </select>
-        </label>
-
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={form.diarization_enabled}
-            onChange={(e) =>
-              setForm({ ...form, diarization_enabled: e.target.checked })
-            }
-          />
-          {dict.diarization}
         </label>
 
         <label className="check">

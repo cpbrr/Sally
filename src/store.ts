@@ -28,6 +28,7 @@ interface SallyState {
   pendingRecoveries: number;
   paused: boolean;
   meetingStartedAt: number | null;
+  meetingEndedAt: number | null;
   pausedAccumMs: number;
   pausedSince: number | null;
   showSettings: boolean;
@@ -41,6 +42,7 @@ interface SallyState {
   setReview: (r: ReviewInfo | null) => void;
   setPendingRecoveries: (n: number) => void;
   startMeetingClock: () => void;
+  stopMeetingClock: () => void;
   setPaused: (paused: boolean) => void;
   resetMeeting: () => void;
   setShowSettings: (v: boolean) => void;
@@ -59,6 +61,7 @@ export const useSally = create<SallyState>((set, get) => ({
   pendingRecoveries: 0,
   paused: false,
   meetingStartedAt: null,
+  meetingEndedAt: null,
   pausedAccumMs: 0,
   pausedSince: null,
   showSettings: false,
@@ -78,10 +81,12 @@ export const useSally = create<SallyState>((set, get) => ({
   startMeetingClock: () =>
     set({
       meetingStartedAt: Date.now(),
+      meetingEndedAt: null,
       pausedAccumMs: 0,
       pausedSince: null,
       paused: false,
     }),
+  stopMeetingClock: () => set({ meetingEndedAt: Date.now() }),
   setPaused: (paused) => {
     const s = get();
     if (paused && !s.paused) {
@@ -98,6 +103,7 @@ export const useSally = create<SallyState>((set, get) => ({
       review: null,
       paused: false,
       meetingStartedAt: null,
+      meetingEndedAt: null,
       pausedAccumMs: 0,
       pausedSince: null,
       status: "idle",
