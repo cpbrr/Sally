@@ -86,7 +86,7 @@ body {
   flex: none;
 }
 .status-dot.live { background: var(--ok); }
-.status-dot.connecting, .status-dot.reconnecting { background: var(--warn); }
+.status-dot.connecting, .status-dot.reconnecting, .status-dot.downloading-models { background: var(--warn); }
 .status-dot.paused { background: var(--text-dim); }
 .status-dot.idle, .status-dot.ended { background: var(--text-dim); }
 .status-dot.storage-error { background: var(--danger); }
@@ -188,13 +188,16 @@ select:focus, input:focus { outline: 1px solid var(--accent); }
   position: absolute;
   bottom: 8px;
   right: 12px;
-  background: var(--accent-soft);
+  /* Solid: must stay readable over transcript text and with the
+     translucent window mode. */
+  background: rgb(35, 39, 47);
   color: var(--accent);
   border: 1px solid var(--accent);
   border-radius: 12px;
   font-size: 11px;
   padding: 2px 10px;
   cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
 }
 
 .divider {

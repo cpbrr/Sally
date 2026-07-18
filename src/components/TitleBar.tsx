@@ -11,6 +11,7 @@ const STATUS_KEYS: Record<string, string> = {
   ended: "statusEnded",
   idle: "statusIdle",
   "storage-error": "statusStorageError",
+  "downloading-models": "statusDownloadingModels",
 };
 
 export function TitleBar() {

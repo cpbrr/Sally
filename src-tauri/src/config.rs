@@ -16,7 +16,8 @@ const KEY_LIVE_MODEL: &str = "SALLY_LIVE_MODEL";
 const KEY_CLEANUP_MODEL: &str = "SALLY_CLEANUP_MODEL";
 const KEY_TARGET_LANG: &str = "SALLY_TARGET_LANGUAGE";
 const KEY_UI_LANG: &str = "SALLY_UI_LANGUAGE";
-const KEY_DIARIZATION: &str = "SALLY_DIARIZATION";
+const KEY_VAD_MODEL_URL: &str = "SALLY_VAD_MODEL_URL";
+const KEY_SPEAKER_MODEL_URL: &str = "SALLY_SPEAKER_MODEL_URL";
 const KEY_ALWAYS_ON_TOP: &str = "SALLY_ALWAYS_ON_TOP";
 const KEY_MIC_DEVICE: &str = "SALLY_MIC_DEVICE";
 const KEY_SYSTEM_DEVICE: &str = "SALLY_SYSTEM_DEVICE";
@@ -35,13 +36,16 @@ pub struct AppConfig {
     pub cleanup_model: String,
     pub target_language: String,
     pub ui_language: String,
-    pub diarization_enabled: bool,
     pub always_on_top: bool,
     pub mic_device: String,
     pub system_device: String,
     /// Read translated audio aloud for passages not already in the target
     /// language. Off by default.
     pub readout_enabled: bool,
+    /// Diarization model URL overrides for air-gapped setups; empty means
+    /// the official sherpa-onnx release assets.
+    pub vad_model_url: String,
+    pub speaker_model_url: String,
     /// Live API version (`v1alpha` or `v1beta`). Preview models usually live
     /// on v1alpha; the session flips automatically if setup is rejected.
     pub live_api_version: String,
@@ -56,7 +60,6 @@ impl AppConfig {
             cleanup_model: DEFAULT_CLEANUP_MODEL.into(),
             target_language: "Vietnamese".into(),
             ui_language: "en".into(),
-            diarization_enabled: true,
             // Off by default: staying pinned above everything during setup
             // proved annoying. The title-bar pin turns it on per window.
             always_on_top: false,
@@ -64,6 +67,8 @@ impl AppConfig {
             system_device: String::new(),
             readout_enabled: false,
             live_api_version: DEFAULT_LIVE_API_VERSION.into(),
+            vad_model_url: String::new(),
+            speaker_model_url: String::new(),
         }
     }
 
@@ -113,11 +118,12 @@ impl AppConfig {
                 cfg.ui_language = v.clone();
             }
         }
-        cfg.diarization_enabled = get(KEY_DIARIZATION) != "off";
         cfg.always_on_top = get(KEY_ALWAYS_ON_TOP) != "off";
         cfg.mic_device = get(KEY_MIC_DEVICE);
         cfg.system_device = get(KEY_SYSTEM_DEVICE);
         cfg.readout_enabled = get(KEY_READOUT) == "on";
+        cfg.vad_model_url = get(KEY_VAD_MODEL_URL);
+        cfg.speaker_model_url = get(KEY_SPEAKER_MODEL_URL);
         let ver = get(KEY_LIVE_API_VERSION);
         if !ver.is_empty() {
             cfg.live_api_version = ver;
@@ -141,9 +147,10 @@ impl AppConfig {
         map.insert(KEY_CLEANUP_MODEL.into(), self.cleanup_model.clone());
         map.insert(KEY_TARGET_LANG.into(), self.target_language.clone());
         map.insert(KEY_UI_LANG.into(), self.ui_language.clone());
+        map.insert(KEY_VAD_MODEL_URL.into(), self.vad_model_url.clone());
         map.insert(
-            KEY_DIARIZATION.into(),
-            if self.diarization_enabled { "on" } else { "off" }.into(),
+            KEY_SPEAKER_MODEL_URL.into(),
+            self.speaker_model_url.clone(),
         );
         map.insert(
             KEY_ALWAYS_ON_TOP.into(),
@@ -179,7 +186,6 @@ impl AppConfig {
             cleanup_model: self.cleanup_model.clone(),
             target_language: self.target_language.clone(),
             ui_language: self.ui_language.clone(),
-            diarization_enabled: self.diarization_enabled,
             always_on_top: self.always_on_top,
             mic_device: self.mic_device.clone(),
             system_device: self.system_device.clone(),
@@ -196,7 +202,6 @@ pub struct RedactedConfig {
     pub cleanup_model: String,
     pub target_language: String,
     pub ui_language: String,
-    pub diarization_enabled: bool,
     pub always_on_top: bool,
     pub mic_device: String,
     pub system_device: String,
@@ -284,7 +289,6 @@ mod tests {
         let cfg = AppConfig::load(std::env::temp_dir().join("sally-none")).unwrap();
         assert_eq!(cfg.live_model, DEFAULT_LIVE_MODEL);
         assert_eq!(cfg.cleanup_model, DEFAULT_CLEANUP_MODEL);
-        assert!(cfg.diarization_enabled);
         assert!(!cfg.always_on_top, "always-on-top must default off");
         assert!(!cfg.readout_enabled);
         assert_eq!(cfg.live_api_version, DEFAULT_LIVE_API_VERSION);

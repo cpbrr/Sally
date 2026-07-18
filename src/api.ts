@@ -11,7 +11,6 @@ export interface RedactedConfig {
   cleanup_model: string;
   target_language: string;
   ui_language: string;
-  diarization_enabled: boolean;
   always_on_top: boolean;
   mic_device: string;
   system_device: string;
@@ -31,7 +30,6 @@ export interface SettingsPayload {
   cleanup_model?: string;
   target_language?: string;
   ui_language?: string;
-  diarization_enabled?: boolean;
   always_on_top?: boolean;
   mic_device?: string;
   system_device?: string;

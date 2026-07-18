@@ -48,6 +48,8 @@ pub struct MixedChunk {
     pub mic: Vec<i16>,
     /// True when the microphone carried speech-level energy in this chunk.
     pub mic_active: bool,
+    /// True when system audio carried speech-level energy in this chunk.
+    pub system_active: bool,
 }
 
 /// Convert f32 samples in [-1, 1] to i16 with clamping.

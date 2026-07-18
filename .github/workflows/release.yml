@@ -28,11 +28,17 @@ jobs:
           workspaces: src-tauri
       - run: npm ci
       - run: npx tauri build --no-bundle
+        env:
+          # bindgen (sherpa-rs-sys) needs libclang; LLVM ships on the runner.
+          LIBCLANG_PATH: C:\Program Files\LLVM\bin
       - name: Package portable ZIP
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force staging | Out-Null
           Copy-Item src-tauri/target/release/sally.exe staging/Sally.exe
+          # sherpa-onnx runtime libraries, when built as shared libs.
+          Get-ChildItem src-tauri/target/release -Filter *.dll -ErrorAction SilentlyContinue |
+            ForEach-Object { Copy-Item $_.FullName staging/ }
           Copy-Item .env.example staging/.env.example
           Copy-Item README.md staging/README.md
           Compress-Archive -Path staging/* -DestinationPath Sally-windows-x64-portable.zip -Force
@@ -60,6 +66,10 @@ jobs:
         with:
           workspaces: src-tauri
       - run: npm ci
+      - name: libclang for bindgen
+        run: |
+          brew list llvm &>/dev/null || brew install llvm
+          echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
       - run: npx tauri build --target aarch64-apple-darwin --bundles app,dmg
       - name: Checksums
         run: |

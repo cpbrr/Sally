@@ -24,10 +24,12 @@ export function SessionBar() {
     status,
     statusDetail,
     review,
+    meetingEndedAt,
     setPhase,
     setPaused,
     setReview,
     startMeetingClock,
+    stopMeetingClock,
     resetMeeting,
     setStatus,
   } = useSally();
@@ -41,10 +43,11 @@ export function SessionBar() {
     return () => clearInterval(id);
   }, []);
 
+  // Clock freezes at meeting end instead of ticking forever.
+  const clockNow =
+    meetingEndedAt ?? (paused && pausedSince ? pausedSince : now);
   const elapsed = meetingStartedAt
-    ? (paused && pausedSince ? pausedSince : now) -
-      meetingStartedAt -
-      pausedAccumMs
+    ? clockNow - meetingStartedAt - pausedAccumMs
     : 0;
 
   const start = async () => {
@@ -82,6 +85,7 @@ export function SessionBar() {
     setBusy(true);
     try {
       const review = await api.endMeeting();
+      stopMeetingClock();
       setReview(review);
       setPhase("saved");
     } catch (e) {
