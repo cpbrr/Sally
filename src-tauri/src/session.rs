@@ -201,7 +201,7 @@ async fn run_session(
     // new *concrete* speaker label, the open entry's original is frozen so
     // entries stay single-speaker. Meeting/Multiple-speakers transitions do
     // not split — that caused mid-sentence cuts.
-    let mut ranges_seen = 0usize;
+    let mut range_end_seen = 0u64;
     let mut last_concrete_speaker: Option<u32> = None;
     /// Don't split entries with fewer original characters than this.
     const MIN_SPLIT_CHARS: usize = 12;
@@ -317,9 +317,9 @@ async fn run_session(
                         // Split the open entry when a new concrete speaker
                         // appears. The original freezes; its translation
                         // keeps streaming into the closing entry.
-                        if let Some((count, label)) = diarizer.latest_range() {
-                            if count > ranges_seen {
-                                ranges_seen = count;
+                        if let Some((end_ms, label)) = diarizer.latest_range() {
+                            if end_ms > range_end_seen {
+                                range_end_seen = end_ms;
                                 if let crate::diarization::SpeakerLabel::Speaker(n) = label {
                                     let changed = last_concrete_speaker
                                         .map(|prev| prev != n)
