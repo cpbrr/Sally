@@ -47,8 +47,11 @@ const MAX_CLUSTERS: usize = 8;
 /// Overridable via `SALLY_DIAR_THRESHOLD` for unusual channels.
 pub const DEFAULT_CLUSTER_THRESHOLD: f32 = 0.5;
 /// pyannote post-processing: speech shorter than this is dropped, silences
-/// shorter than this are bridged (values from the sherpa-onnx examples).
-const SEG_MIN_DURATION_ON: f32 = 0.3;
+/// shorter than this are bridged. Sub-second regions embed unreliably and
+/// each one can seed a junk speaker under complete linkage (observed: a
+/// 2-person podcast climbing to 20 "speakers"), so the on-floor sits well
+/// above the sherpa-onnx example value.
+const SEG_MIN_DURATION_ON: f32 = 0.8;
 const SEG_MIN_DURATION_OFF: f32 = 0.5;
 /// Diarization passes never run closer together than this...
 const MIN_PASS_INTERVAL_MS: u64 = 10_000;
@@ -61,6 +64,13 @@ const PASS_COST_FACTOR: u64 = 4;
 /// Retained-audio cap (4 h at 16 kHz mono i16 ≈ 460 MB). Diarization
 /// stops taking new audio past this; the meeting itself is unaffected.
 const MAX_BUFFER_SAMPLES: usize = TARGET_SAMPLE_RATE as usize * 3600 * 4;
+/// Between full passes, a cheap pass over just the newest audio keeps live
+/// labels fresh: full passes drift minutes apart as the meeting grows, and
+/// speech spoken in between otherwise has no label at all until the next
+/// full pass.
+const TAIL_PASS_INTERVAL_MS: u64 = 15_000;
+const TAIL_WINDOW_MS: u64 = 20_000;
+const TAIL_WINDOW_SAMPLES: usize = (TAIL_WINDOW_MS as usize / 1000) * TARGET_SAMPLE_RATE as usize;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub enum SpeakerLabel {
@@ -183,6 +193,24 @@ fn remap_speakers(
         }
     }
     mapping
+}
+
+/// Splice a tail pass's ranges into the timeline: everything that starts
+/// before the tail window survives untouched, the window itself is replaced
+/// wholesale. Both inputs are sorted by start time, so the result stays
+/// sorted.
+fn splice_ranges(
+    prev: &[SpeakerRange],
+    window_start_ms: u64,
+    tail: Vec<SpeakerRange>,
+) -> Vec<SpeakerRange> {
+    let mut out: Vec<SpeakerRange> = prev
+        .iter()
+        .filter(|r| r.start_ms < window_start_ms)
+        .cloned()
+        .collect();
+    out.extend(tail);
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -378,10 +406,12 @@ pub struct DiarizerCore {
     /// Bumped after every pass; the session refreshes past transcript
     /// labels when it changes.
     version: Arc<std::sync::atomic::AtomicU64>,
-    /// Audio duration at the last pipeline pass.
+    /// Audio duration at the last full pipeline pass.
     last_pass_audio_ms: u64,
-    /// Self-tuning gap between passes (grows with pass cost).
+    /// Self-tuning gap between full passes (grows with pass cost).
     pass_interval_ms: u64,
+    /// Audio duration at the last tail (or full) pass.
+    last_tail_audio_ms: u64,
     buffer_full_warned: bool,
     /// Optional per-meeting trace (`diar-debug.log` in the data folder):
     /// one line per pass with timing and speaker counts, for tuning. Never
@@ -420,6 +450,7 @@ impl DiarizerCore {
             version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             last_pass_audio_ms: 0,
             pass_interval_ms: MIN_PASS_INTERVAL_MS,
+            last_tail_audio_ms: 0,
             buffer_full_warned: false,
             debug: None,
         })
@@ -441,13 +472,15 @@ impl DiarizerCore {
             version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             last_pass_audio_ms: 0,
             pass_interval_ms: MIN_PASS_INTERVAL_MS,
+            last_tail_audio_ms: 0,
             buffer_full_warned: false,
             debug: None,
         }
     }
 
     pub fn push_chunk(&mut self, samples: &[i16], t_ms: u64) {
-        let mut due = false;
+        let mut full_due = false;
+        let mut tail_due = false;
         match &mut self.backend {
             Backend::Sherpa { buffer, clock, .. } => {
                 clock.push_chunk(samples.len(), t_ms);
@@ -458,12 +491,22 @@ impl DiarizerCore {
                     log::warn!("diarization audio buffer full; labels frozen from here on");
                 }
                 let audio_ms = buffer.len() as u64 * 1000 / TARGET_SAMPLE_RATE as u64;
-                due = audio_ms.saturating_sub(self.last_pass_audio_ms) >= self.pass_interval_ms;
+                full_due =
+                    audio_ms.saturating_sub(self.last_pass_audio_ms) >= self.pass_interval_ms;
+                // Tail passes only make sense once the buffer outgrows the
+                // window; before that a full pass is the same work.
+                tail_due = audio_ms.saturating_sub(self.last_tail_audio_ms)
+                    >= TAIL_PASS_INTERVAL_MS;
+                if tail_due && buffer.len() <= TAIL_WINDOW_SAMPLES {
+                    full_due = true;
+                }
             }
             Backend::Fallback { .. } => self.fallback_push(samples, t_ms),
         }
-        if due {
+        if full_due {
             self.run_sherpa_pass();
+        } else if tail_due {
+            self.run_tail_pass();
         }
     }
 
@@ -501,6 +544,7 @@ impl DiarizerCore {
         }
         let audio_ms = buffer.len() as u64 * 1000 / TARGET_SAMPLE_RATE as u64;
         self.last_pass_audio_ms = audio_ms;
+        self.last_tail_audio_ms = audio_ms;
         let started = std::time::Instant::now();
         let samples: Vec<f32> = buffer.iter().map(|&s| s as f32 / 32768.0).collect();
         let result = diarize.compute(samples, None);
@@ -558,6 +602,91 @@ impl DiarizerCore {
                     let _ = writeln!(
                         f,
                         "pass: {:.1}s audio -> no result in {}ms ({e})",
+                        audio_ms as f64 / 1000.0,
+                        cost_ms,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Cheap freshness pass: diarize only the newest `TAIL_WINDOW_MS` of
+    /// audio and splice the result into the timeline, remapped against the
+    /// existing ranges so established speakers keep their labels. Bounded
+    /// cost regardless of meeting length; the next full pass reconciles
+    /// everything.
+    fn run_tail_pass(&mut self) {
+        let Backend::Sherpa {
+            diarize,
+            buffer,
+            clock,
+        } = &mut self.backend
+        else {
+            return;
+        };
+        if buffer.len() <= TAIL_WINDOW_SAMPLES {
+            return;
+        }
+        let audio_ms = buffer.len() as u64 * 1000 / TARGET_SAMPLE_RATE as u64;
+        self.last_tail_audio_ms = audio_ms;
+        let base = buffer.len() - TAIL_WINDOW_SAMPLES;
+        let window_start_ms = clock.to_ms(base as u64);
+        let started = std::time::Instant::now();
+        let samples: Vec<f32> = buffer[base..].iter().map(|&s| s as f32 / 32768.0).collect();
+        let result = diarize.compute(samples, None);
+        let cost_ms = started.elapsed().as_millis() as u64;
+        match result {
+            Ok(raw) => {
+                let segs: Vec<(u64, u64, i32)> = raw
+                    .iter()
+                    .filter_map(|s| {
+                        let a = clock.to_ms(
+                            base as u64
+                                + (s.start.max(0.0) as f64 * TARGET_SAMPLE_RATE as f64) as u64,
+                        );
+                        let b = clock.to_ms(
+                            base as u64
+                                + (s.end.max(0.0) as f64 * TARGET_SAMPLE_RATE as f64) as u64,
+                        );
+                        (b > a).then_some((a, b, s.speaker))
+                    })
+                    .collect();
+                let mut ranges = self.ranges.lock().unwrap();
+                let mapping = remap_speakers(&ranges, &segs);
+                let tail: Vec<SpeakerRange> = segs
+                    .iter()
+                    .map(|&(a, b, id)| SpeakerRange {
+                        start_ms: a,
+                        end_ms: b,
+                        label: SpeakerLabel::Speaker(mapping[&id]),
+                        confidence: 1.0,
+                    })
+                    .collect();
+                let spliced = splice_ranges(&ranges, window_start_ms, tail);
+                *ranges = spliced;
+                drop(ranges);
+                if let Some(f) = self.debug.as_mut() {
+                    use std::io::Write;
+                    let _ = writeln!(
+                        f,
+                        "tail: {}s window at {:.1}s -> {} segments in {}ms",
+                        TAIL_WINDOW_MS / 1000,
+                        audio_ms as f64 / 1000.0,
+                        segs.len(),
+                        cost_ms,
+                    );
+                }
+                self.version
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            Err(e) => {
+                // Zero detected segments in the window (silence) also lands
+                // here; keep the existing ranges.
+                if let Some(f) = self.debug.as_mut() {
+                    use std::io::Write;
+                    let _ = writeln!(
+                        f,
+                        "tail: no result at {:.1}s in {}ms ({e})",
                         audio_ms as f64 / 1000.0,
                         cost_ms,
                     );
@@ -733,11 +862,13 @@ impl DiarizerHandle {
         }
     }
 
-    /// (completed range count, label of the newest range). The session uses
-    /// this to split the open timeline entry when the speaker changes.
-    pub fn latest_range(&self) -> Option<(usize, SpeakerLabel)> {
+    /// (end of the newest range, its label). The session uses this to split
+    /// the open timeline entry when the speaker changes. The end timestamp
+    /// — not the range count — signals novelty: passes replace the range
+    /// set wholesale, so the count can shrink while coverage still grows.
+    pub fn latest_range(&self) -> Option<(u64, SpeakerLabel)> {
         let ranges = self.ranges.lock().unwrap();
-        ranges.last().map(|r| (ranges.len(), r.label.clone()))
+        ranges.last().map(|r| (r.end_ms, r.label.clone()))
     }
 
     /// Close the open segment and wait for the thread to drain. The final
@@ -946,6 +1077,27 @@ mod tests {
         assert_eq!(mapping[&0], 1);
         assert_eq!(mapping[&1], 2);
         assert_eq!(mapping[&2], 3, "unseen voice must get the next label");
+    }
+
+    #[test]
+    fn tail_splice_replaces_only_the_window() {
+        let prev = vec![
+            range(0, 10_000, 1),
+            range(10_000, 20_000, 2),
+            range(20_000, 28_000, 1),
+        ];
+        let tail = vec![range(21_000, 26_000, 1), range(26_000, 30_000, 2)];
+        let out = splice_ranges(&prev, 20_500, tail);
+        // Pre-window ranges intact (including the one straddling the
+        // boundary), in-window ranges replaced by the tail.
+        assert_eq!(out.len(), 5);
+        assert_eq!(
+            (out[0].start_ms, out[1].start_ms, out[2].start_ms),
+            (0, 10_000, 20_000)
+        );
+        assert_eq!(out[3].start_ms, 21_000);
+        assert_eq!(out[4].end_ms, 30_000);
+        assert!(out.windows(2).all(|w| w[0].start_ms <= w[1].start_ms));
     }
 
     #[test]
