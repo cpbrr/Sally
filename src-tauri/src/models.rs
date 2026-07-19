@@ -1,22 +1,25 @@
-//! Diarization model manager. Sally uses sherpa-onnx (silero VAD + a
-//! speaker-embedding model) for speaker diarization. Model files are
-//! downloaded once into `<data dir>/models/` from the official sherpa-onnx
-//! release assets; URLs are overridable through `.env` for air-gapped
-//! setups (drop the files in manually and Sally skips the download).
+//! Diarization model manager. Sally uses the sherpa-onnx offline speaker
+//! diarization pipeline: a pyannote segmentation model finds who-spoke-when
+//! regions and a speaker-embedding model feeds agglomerative clustering.
+//! Model files are downloaded once into `<data dir>/models/`; URLs are
+//! overridable through `.env` for air-gapped setups (drop the files in
+//! manually and Sally skips the download).
 
 use crate::error::{Result, SallyError};
 use std::path::{Path, PathBuf};
 
-pub const VAD_FILE: &str = "silero_vad.onnx";
-// Versioned filename: changing the default model changes the name so
+// Versioned filenames: changing a default model changes the name so
 // existing installs re-download instead of loading the old weights.
+pub const SEGMENTATION_FILE: &str = "segmentation_pyannote3.onnx";
 pub const SPEAKER_FILE: &str = "speaker_titanet.onnx";
 
-const VAD_URL: &str =
-    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx";
+// pyannote segmentation-3.0 converted for sherpa-onnx, ~6 MB. The GitHub
+// release asset is a tar.bz2; this mirror serves the bare .onnx so no
+// archive extraction is needed.
+const SEGMENTATION_URL: &str = "https://huggingface.co/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0/resolve/main/model.onnx";
 // NeMo TitaNet-small, ~38 MB. Measured on known-speaker audio
 // (sr-data): same-speaker cosine 0.73, different-speaker 0.15–0.19 —
-// a wide margin around the 0.45 join threshold. CAM++ measured
+// a wide margin for the clustering threshold. CAM++ measured
 // 0.61 vs 0.36–0.47 (different speakers crossed the threshold, which
 // merged everyone into one cluster). (The upstream release tag really
 // is spelled "recongition".)
@@ -24,7 +27,7 @@ const SPEAKER_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/downlo
 
 #[derive(Debug, Clone)]
 pub struct ModelPaths {
-    pub vad: PathBuf,
+    pub segmentation: PathBuf,
     pub speaker: PathBuf,
 }
 
@@ -36,10 +39,10 @@ pub fn models_dir(data_dir: &Path) -> PathBuf {
 pub fn existing_models(data_dir: &Path) -> Option<ModelPaths> {
     let dir = models_dir(data_dir);
     let paths = ModelPaths {
-        vad: dir.join(VAD_FILE),
+        segmentation: dir.join(SEGMENTATION_FILE),
         speaker: dir.join(SPEAKER_FILE),
     };
-    if paths.vad.exists() && paths.speaker.exists() {
+    if paths.segmentation.exists() && paths.speaker.exists() {
         Some(paths)
     } else {
         None
@@ -47,10 +50,10 @@ pub fn existing_models(data_dir: &Path) -> Option<ModelPaths> {
 }
 
 /// Ensure both models exist, downloading whatever is missing. Slow on first
-/// run (~28 MB total); callers should surface progress to the UI.
+/// run (~44 MB total); callers should surface progress to the UI.
 pub async fn ensure_models(
     data_dir: &Path,
-    vad_url_override: &str,
+    segmentation_url_override: &str,
     speaker_url_override: &str,
 ) -> Result<ModelPaths> {
     if let Some(paths) = existing_models(data_dir) {
@@ -58,21 +61,28 @@ pub async fn ensure_models(
     }
     let dir = models_dir(data_dir);
     std::fs::create_dir_all(&dir)?;
-    let vad_url = if vad_url_override.is_empty() { VAD_URL } else { vad_url_override };
+    let segmentation_url = if segmentation_url_override.is_empty() {
+        SEGMENTATION_URL
+    } else {
+        segmentation_url_override
+    };
     let speaker_url = if speaker_url_override.is_empty() {
         SPEAKER_URL
     } else {
         speaker_url_override
     };
-    let vad = dir.join(VAD_FILE);
+    let segmentation = dir.join(SEGMENTATION_FILE);
     let speaker = dir.join(SPEAKER_FILE);
-    if !vad.exists() {
-        download(vad_url, &vad).await?;
+    if !segmentation.exists() {
+        download(segmentation_url, &segmentation).await?;
     }
     if !speaker.exists() {
         download(speaker_url, &speaker).await?;
     }
-    Ok(ModelPaths { vad, speaker })
+    Ok(ModelPaths {
+        segmentation,
+        speaker,
+    })
 }
 
 async fn download(url: &str, dest: &Path) -> Result<()> {
