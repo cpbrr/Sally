@@ -1,7 +1,7 @@
 //! Audio capture adapter and pipeline (design §4.2 items 1–2).
 //!
 //! The capture adapter produces timestamped frames from the microphone and
-//! from system audio. It contains no Gemini or UI logic. The pipeline
+//! from system audio. No Gemini or UI logic lives here. The pipeline
 //! resamples both sources to Gemini's mono 16 kHz PCM, mixes them, and keeps
 //! only bounded in-memory buffers — audio never touches disk.
 
@@ -43,8 +43,6 @@ pub struct MixedChunk {
     pub t_ms: u64,
     /// Mixed mic + system samples, i16 little-endian order when serialized.
     pub mixed: Vec<i16>,
-    /// System-only copy for diarization.
-    pub system: Vec<i16>,
     /// Microphone-only copy, sent instead of `mixed` while readout audio is
     /// playing so the spoken translation is not translated again.
     pub mic: Vec<i16>,

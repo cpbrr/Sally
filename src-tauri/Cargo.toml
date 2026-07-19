@@ -1,6 +1,6 @@
 [package]
 name = "sally"
-version = "0.5.1"
+version = "0.6.0"
 edition = "2021"
 description = "Floating live translation and transcription for meetings"
 license = "MIT"
@@ -24,8 +24,6 @@ tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 cpal = "0.15"
-# Speaker diarization: silero VAD + speaker embeddings via sherpa-onnx.
-sherpa-rs = "0.6"
 
 [target.'cfg(windows)'.dependencies]
 # Per-app audio capture: WASAPI process loopback + session enumeration.
@@ -37,7 +35,6 @@ windows = { version = "0.61", features = [
     "Win32_System_Com",
     "Win32_Media_Audio",
 ] }
-anyhow = "1"
 thiserror = "2"
 chrono = { version = "0.4", features = ["serde"] }
 base64 = "0.22"

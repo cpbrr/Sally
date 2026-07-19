@@ -9,8 +9,8 @@ Markdown. Design: [`2026-07-17-sally-live-translation-design.md`](./2026-07-17-s
 
 - Tauri 2 shell, React + TypeScript UI (`src/`)
 - Rust core services (`src-tauri/src/`): audio capture adapter, audio
-  pipeline, diarization, Gemini Live client, timeline assembler, meeting
-  store, cleanup service
+  pipeline, Gemini Live client, timeline assembler, meeting store, cleanup
+  service
 - Gemini Live API for translation, Gemini Developer API for optional cleanup
   (model names configurable in `.env`)
 
@@ -64,20 +64,11 @@ readout is captured back by loopback and re-enters the pipeline.
   ScreenCaptureKit system-audio adapter is not implemented yet
   (`src-tauri/src/audio/capture.rs`), and signing/notarization is pending.
 
-## Diarization
+## Speakers
 
-Speaker labels are best-effort and local (design §7), always on. Sally uses
-the sherpa-onnx offline speaker-diarization pipeline: a pyannote
-segmentation model finds who-spoke-when regions and a NeMo TitaNet
-embedding model feeds agglomerative clustering. Live meetings re-run the
-pipeline over the buffered audio on a self-tuning cadence, so past labels
-heal as more of each voice is heard. The two model files (~44 MB) download
-automatically on the first meeting into `<data folder>/models/`; URLs and
-the clustering threshold are overridable in `.env`. Without the models
-(offline first run) a coarse built-in fallback keeps meetings working.
-
-Building from source needs libclang for bindgen (`winget install LLVM.LLVM`
-on Windows, `brew install llvm` on macOS; set `LIBCLANG_PATH` accordingly).
+Timeline entries are attributed locally by audio activity: turns dominated
+by microphone energy are labeled `You`, everything else `Meeting`. Labels
+can be renamed or merged in the review screen after the meeting.
 
 ## Privacy
 

@@ -1,7 +1,6 @@
 //! Audio pipeline: per-source resampling to 16 kHz mono, bounded buffering,
 //! and mixing into 100 ms chunks for the Gemini Live client. Keeps a
-//! system-only copy for diarization and a mic-activity flag for `You`
-//! labeling. Never writes audio to disk.
+//! mic-activity flag for `You` labeling. Never writes audio to disk.
 
 use super::{
     downmix, f32_to_i16, AudioSource, LinearResampler, MixedChunk, RawFrame, CHUNK_SAMPLES,
@@ -114,7 +113,6 @@ impl Pipeline {
             .zip(system.iter())
             .map(|(a, b)| f32_to_i16((a + b).clamp(-1.0, 1.0)))
             .collect();
-        let system_i16: Vec<i16> = system.iter().map(|&s| f32_to_i16(s)).collect();
         let mic_i16: Vec<i16> = mic.iter().map(|&s| f32_to_i16(s)).collect();
 
         let chunk_ms = (CHUNK_SAMPLES as u64 * 1000) / TARGET_SAMPLE_RATE as u64;
@@ -123,7 +121,6 @@ impl Pipeline {
             seq: self.seq,
             t_ms,
             mixed,
-            system: system_i16,
             mic: mic_i16,
             mic_active: mic_rms > MIC_ACTIVITY_RMS,
             system_active: system_rms > SYSTEM_ACTIVITY_RMS,

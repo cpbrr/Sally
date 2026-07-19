@@ -176,25 +176,6 @@ impl MeetingStore {
         Ok(())
     }
 
-    /// Rewrite the raw file from the reconciled in-memory timeline (final
-    /// diarization pass may relabel earlier entries). Atomic via temp file;
-    /// the append-as-you-go file remains the crash-safe fallback until this
-    /// succeeds.
-    pub fn rewrite_with_entries(
-        &self,
-        entries: &[TimelineEntry],
-        target_language: &str,
-    ) -> Result<()> {
-        let mut out = render_header(&self.meta);
-        for e in entries {
-            out.push_str(&render_entry(e, target_language));
-        }
-        let tmp = self.raw_path.with_extension("md.tmp");
-        std::fs::write(&tmp, out)?;
-        std::fs::rename(&tmp, &self.raw_path)?;
-        Ok(())
-    }
-
     /// Persist provisional (not yet finalized) state. Called periodically
     /// during the meeting; contains text only, never audio (design §8.2).
     pub fn write_journal(&self, journal: &RecoveryJournal) -> Result<()> {

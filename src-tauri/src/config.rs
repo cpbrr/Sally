@@ -17,9 +17,6 @@ const KEY_CLEANUP_MODEL: &str = "SALLY_CLEANUP_MODEL";
 const KEY_TARGET_LANG: &str = "SALLY_TARGET_LANGUAGE";
 const KEY_UI_LANG: &str = "SALLY_UI_LANGUAGE";
 const KEY_CAPTURE_APP: &str = "SALLY_CAPTURE_APP";
-const KEY_SEGMENTATION_MODEL_URL: &str = "SALLY_SEGMENTATION_MODEL_URL";
-const KEY_SPEAKER_MODEL_URL: &str = "SALLY_SPEAKER_MODEL_URL";
-const KEY_DIAR_THRESHOLD: &str = "SALLY_DIAR_THRESHOLD";
 const KEY_ALWAYS_ON_TOP: &str = "SALLY_ALWAYS_ON_TOP";
 const KEY_MIC_DEVICE: &str = "SALLY_MIC_DEVICE";
 const KEY_SYSTEM_DEVICE: &str = "SALLY_SYSTEM_DEVICE";
@@ -48,14 +45,6 @@ pub struct AppConfig {
     /// Read translated audio aloud for passages not already in the target
     /// language. Off by default.
     pub readout_enabled: bool,
-    /// Diarization model URL overrides for air-gapped setups; empty means
-    /// the official sherpa-onnx release assets.
-    pub segmentation_model_url: String,
-    pub speaker_model_url: String,
-    /// Speaker-clustering cosine-distance threshold (larger = fewer
-    /// speakers). Default suits the bundled models; override per setup if
-    /// a channel consistently over- or under-splits.
-    pub diar_threshold: f32,
     /// Live API version (`v1alpha` or `v1beta`). Preview models usually live
     /// on v1alpha; the session flips automatically if setup is rejected.
     pub live_api_version: String,
@@ -78,9 +67,6 @@ impl AppConfig {
             capture_app: String::new(),
             readout_enabled: false,
             live_api_version: DEFAULT_LIVE_API_VERSION.into(),
-            segmentation_model_url: String::new(),
-            speaker_model_url: String::new(),
-            diar_threshold: crate::diarization::DEFAULT_CLUSTER_THRESHOLD,
         }
     }
 
@@ -135,13 +121,6 @@ impl AppConfig {
         cfg.system_device = get(KEY_SYSTEM_DEVICE);
         cfg.capture_app = get(KEY_CAPTURE_APP);
         cfg.readout_enabled = get(KEY_READOUT) == "on";
-        cfg.segmentation_model_url = get(KEY_SEGMENTATION_MODEL_URL);
-        cfg.speaker_model_url = get(KEY_SPEAKER_MODEL_URL);
-        if let Ok(t) = get(KEY_DIAR_THRESHOLD).parse::<f32>() {
-            if (0.05..=0.95).contains(&t) {
-                cfg.diar_threshold = t;
-            }
-        }
         let ver = get(KEY_LIVE_API_VERSION);
         if !ver.is_empty() {
             cfg.live_api_version = ver;
@@ -165,18 +144,6 @@ impl AppConfig {
         map.insert(KEY_CLEANUP_MODEL.into(), self.cleanup_model.clone());
         map.insert(KEY_TARGET_LANG.into(), self.target_language.clone());
         map.insert(KEY_UI_LANG.into(), self.ui_language.clone());
-        map.insert(
-            KEY_SEGMENTATION_MODEL_URL.into(),
-            self.segmentation_model_url.clone(),
-        );
-        map.insert(
-            KEY_SPEAKER_MODEL_URL.into(),
-            self.speaker_model_url.clone(),
-        );
-        map.insert(
-            KEY_DIAR_THRESHOLD.into(),
-            format!("{}", self.diar_threshold),
-        );
         map.insert(
             KEY_ALWAYS_ON_TOP.into(),
             if self.always_on_top { "on" } else { "off" }.into(),

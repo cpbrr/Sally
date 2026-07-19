@@ -1,16 +1,14 @@
 //! Meeting session orchestrator (design §5).
 //!
-//! Owns capture, pipeline, diarization, the Gemini Live connection, the
-//! timeline assembler, and the meeting store for one meeting. Communicates
-//! with the UI through Tauri events and with commands through a control
-//! channel. The session clock is a monotonic `Instant` (design §5).
+//! Owns capture, pipeline, the Gemini Live connection, the timeline
+//! assembler, and the meeting store for one meeting. Communicates with the
+//! UI through Tauri events and with commands through a control channel. The
+//! session clock is a monotonic `Instant` (design §5).
 
 use crate::audio::{capture, pipeline::Pipeline, playback::Player, RawFrame};
 use crate::config::AppConfig;
-use crate::diarization::{DiarizerHandle, SpeakerLookup};
 use crate::error::{Result, SallyError};
 use crate::gemini::live::{self, LiveEvent};
-use crate::models::ModelPaths;
 use crate::readout::ReadoutGate;
 use crate::store::{MeetingStore, RecoveryJournal};
 use crate::timeline::Assembler;
@@ -69,11 +67,7 @@ fn emit_status(app: &AppHandle, state: &str, detail: &str) {
     );
 }
 
-pub fn start(
-    app: AppHandle,
-    config: AppConfig,
-    models: Option<ModelPaths>,
-) -> Result<SessionHandle> {
+pub fn start(app: AppHandle, config: AppConfig) -> Result<SessionHandle> {
     if config.api_key.trim().is_empty() {
         return Err(SallyError::Config(
             "missing Gemini API key; finish setup first".into(),
@@ -113,7 +107,6 @@ pub fn start(
         app,
         config,
         store,
-        models,
         frame_rx,
         control_rx,
         done_tx,
@@ -174,7 +167,6 @@ async fn run_session(
     app: AppHandle,
     config: AppConfig,
     mut store: MeetingStore,
-    models: Option<ModelPaths>,
     mut frame_rx: mpsc::Receiver<RawFrame>,
     mut control_rx: mpsc::Receiver<Control>,
     done_tx: oneshot::Sender<Result<ReviewData>>,
@@ -182,34 +174,9 @@ async fn run_session(
 ) {
     let mut pipeline = Pipeline::new();
     let mut assembler = Assembler::new();
-    // Diarization is always on; sherpa-onnx when models are present,
-    // otherwise the built-in fallback (offline first run).
-    let mut diarizer = DiarizerHandle::spawn(
-        models,
-        Some(config.data_dir.join("diar-debug.log")),
-        config.diar_threshold,
-    );
-    if !diarizer.sherpa_active {
-        log::warn!("diarization running on the fallback backend (models unavailable)");
-        let _ = app.emit(
-            "sally://warning",
-            "Speaker models unavailable — using basic speaker detection. \
-             Check your connection and restart the meeting to retry the download.",
-        );
-    }
-    // Speaker-change tracking: when the diarizer completes a segment with a
-    // new *concrete* speaker label, the open entry's original is frozen so
-    // entries stay single-speaker. Meeting/Multiple-speakers transitions do
-    // not split — that caused mid-sentence cuts.
-    let mut range_end_seen = 0u64;
-    let mut last_concrete_speaker: Option<u32> = None;
-    /// Don't split entries with fewer original characters than this.
-    const MIN_SPLIT_CHARS: usize = 12;
-    // Full meeting timeline kept in memory: every re-cluster pass may
-    // relabel past entries (deferred commitment), and the final
-    // reconciliation rewrites the raw file from this list.
+    // Full meeting timeline kept in memory for the end-of-meeting speaker
+    // list and review data.
     let mut sealed_entries: Vec<crate::timeline::TimelineEntry> = Vec::new();
-    let mut diar_version_seen = 0u64;
     let mut speakers: BTreeSet<String> = BTreeSet::new();
     let mut paused = false;
     let mut last_chunk_ms: u64 = 0;
@@ -303,43 +270,13 @@ async fn run_session(
                     // echo is neutralized downstream instead:
                     // echoTargetLanguage=false keeps the model silent for
                     // it, and target-language transcription fragments inside
-                    // the playback window are dropped. Only diarization
-                    // skips these chunks (the synthetic voice must not
-                    // become a cluster).
+                    // the playback window are dropped.
                     let readout_playing = player
                         .as_mut()
                         .map(|p| p.is_active())
                         .unwrap_or(false);
                     if readout_playing {
                         last_playback_at = Some(Instant::now());
-                    } else {
-                        diarizer.push_chunk(&chunk.system, chunk.t_ms);
-                        // Split the open entry when a new concrete speaker
-                        // appears. The original freezes; its translation
-                        // keeps streaming into the closing entry.
-                        if let Some((end_ms, label)) = diarizer.latest_range() {
-                            if end_ms > range_end_seen {
-                                range_end_seen = end_ms;
-                                if let crate::diarization::SpeakerLabel::Speaker(n) = label {
-                                    let changed = last_concrete_speaker
-                                        .map(|prev| prev != n)
-                                        .unwrap_or(false);
-                                    if changed
-                                        && assembler.open_original_len() >= MIN_SPLIT_CHARS
-                                    {
-                                        if let Some(sealed) = assembler
-                                            .split_for_speaker_change(
-                                                Some(&diarizer as &dyn SpeakerLookup),
-                                            )
-                                        {
-                                            emit_sealed(&app, sealed, &mut store, &config,
-                                                        &mut speakers, &mut sealed_entries);
-                                        }
-                                    }
-                                    last_concrete_speaker = Some(n);
-                                }
-                            }
-                        }
                     }
                     assembler.push_activity(chunk.mic_active, chunk.system_active, chunk.t_ms);
                     if let Some(c) = conn.as_ref() {
@@ -364,7 +301,7 @@ async fn run_session(
                         let tail = gate.end_turn(&original);
                         play(&mut player, &mut readout_enabled, &tail);
                     }
-                    finalize_entry(&app, &mut assembler, &diarizer, &mut store,
+                    finalize_entry(&app, &mut assembler, &mut store,
                                    &config, &mut speakers, &mut sealed_entries);
                     last_fragment_ms = 0;
                 }
@@ -434,13 +371,9 @@ async fn run_session(
                             play(&mut player, &mut readout_enabled, &tail);
                         }
                         // Rotate instead of sealing immediately: the entry
-                        // stays open one more turn so the diarizer can close
-                        // its speech segment (labels were coming back as
-                        // "Meeting" because the lookup ran too early) and
-                        // trailing translation fragments can land.
-                        if let Some(sealed) = assembler
-                            .split_for_speaker_change(Some(&diarizer as &dyn SpeakerLookup))
-                        {
+                        // stays open one more turn so trailing translation
+                        // fragments can land in it.
+                        if let Some(sealed) = assembler.rotate_turn() {
                             emit_sealed(&app, sealed, &mut store, &config,
                                         &mut speakers, &mut sealed_entries);
                         }
@@ -502,14 +435,8 @@ async fn run_session(
                 }
             }
 
-            // Periodic recovery journal (design §8.2) + label refresh after
-            // each diarizer re-cluster.
+            // Periodic recovery journal (design §8.2).
             _ = journal_tick.tick() => {
-                let v = diarizer.version();
-                if v != diar_version_seen {
-                    diar_version_seen = v;
-                    refresh_labels(&app, &diarizer, &mut sealed_entries);
-                }
                 let partial = assembler.partial();
                 let journal = RecoveryJournal {
                     open_original: partial.as_ref().map(|p| p.original.clone()).unwrap_or_default(),
@@ -524,19 +451,14 @@ async fn run_session(
         }
     }
 
-    // Meeting end: close diarization (final reconciliation pass), relabel
-    // the whole timeline, finalize open entries, and rewrite the raw file
-    // with the reconciled labels.
+    // Meeting end: finalize open entries and close the store. The raw file
+    // was appended as entries sealed, so no rewrite is needed — ending is
+    // immediate.
     alive.store(false, Ordering::SeqCst);
     capture_handle.stop();
-    diarizer.finish();
-    refresh_labels(&app, &diarizer, &mut sealed_entries);
-    finalize_entry(&app, &mut assembler, &diarizer, &mut store, &config,
+    finalize_entry(&app, &mut assembler, &mut store, &config,
                    &mut speakers, &mut sealed_entries);
     drop(conn);
-    if let Err(e) = store.rewrite_with_entries(&sealed_entries, &config.target_language) {
-        log::error!("final transcript rewrite failed: {e}");
-    }
     if let Err(e) = store.finalize() {
         log::error!("finalize failed: {e}");
     }
@@ -602,43 +524,13 @@ fn emit_sealed(
 fn finalize_entry(
     app: &AppHandle,
     assembler: &mut Assembler,
-    diarizer: &DiarizerHandle,
     store: &mut MeetingStore,
     config: &AppConfig,
     speakers: &mut BTreeSet<String>,
     sealed_entries: &mut Vec<crate::timeline::TimelineEntry>,
 ) {
-    for entry in assembler.finalize_turn(Some(diarizer as &dyn SpeakerLookup)) {
+    for entry in assembler.finalize_turn() {
         emit_sealed(app, entry, store, config, speakers, sealed_entries);
-    }
-}
-
-/// Recompute speaker labels for already-sealed entries against the latest
-/// diarization state (deferred commitment: past labels heal as more of each
-/// voice is heard). Emits `sally://entry-update` for changed entries.
-fn refresh_labels(
-    app: &AppHandle,
-    diarizer: &DiarizerHandle,
-    sealed_entries: &mut [crate::timeline::TimelineEntry],
-) {
-    use crate::diarization::SpeakerLabel;
-    use crate::timeline::EntryKind;
-    let mut updates: Vec<serde_json::Value> = Vec::new();
-    for e in sealed_entries.iter_mut() {
-        if e.kind != EntryKind::Speech || e.speaker == "You" {
-            continue;
-        }
-        let label = diarizer
-            .label_for_span(e.start_ms, e.end_ms.max(e.start_ms + 1))
-            .unwrap_or(SpeakerLabel::Meeting)
-            .display();
-        if label != e.speaker {
-            e.speaker = label.clone();
-            updates.push(json!({ "index": e.index, "speaker": label }));
-        }
-    }
-    if !updates.is_empty() {
-        let _ = app.emit("sally://entry-update", updates);
     }
 }
 

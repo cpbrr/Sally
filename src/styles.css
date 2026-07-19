@@ -86,7 +86,7 @@ body {
   flex: none;
 }
 .status-dot.live { background: var(--ok); }
-.status-dot.connecting, .status-dot.reconnecting, .status-dot.downloading-models { background: var(--warn); }
+.status-dot.connecting, .status-dot.reconnecting { background: var(--warn); }
 .status-dot.paused { background: var(--text-dim); }
 .status-dot.idle, .status-dot.ended { background: var(--text-dim); }
 .status-dot.storage-error { background: var(--danger); }

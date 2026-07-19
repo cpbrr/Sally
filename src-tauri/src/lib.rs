@@ -1,11 +1,9 @@
 pub mod audio;
 pub mod commands;
 pub mod config;
-pub mod diarization;
 pub mod error;
 pub mod gemini;
 pub mod lang;
-pub mod models;
 pub mod readout;
 pub mod session;
 pub mod store;
