@@ -187,6 +187,7 @@ async fn run_session(
     let mut diarizer = DiarizerHandle::spawn(
         models,
         Some(config.data_dir.join("diar-debug.log")),
+        config.diar_threshold,
     );
     if !diarizer.sherpa_active {
         log::warn!("diarization running on the fallback backend (models unavailable)");

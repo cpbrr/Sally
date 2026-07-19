@@ -236,9 +236,10 @@ pub async fn start_meeting(
             *state.config.lock().await = Some(cfg.clone());
         }
     }
-    // Diarization models (silero VAD + speaker embedding): download once on
-    // first meeting (~28 MB). If that fails (offline), the session falls
-    // back to the built-in diarizer rather than blocking the meeting.
+    // Diarization models (pyannote segmentation + speaker embedding):
+    // download once on first meeting (~44 MB). If that fails (offline), the
+    // session falls back to the built-in diarizer rather than blocking the
+    // meeting.
     let models = match crate::models::existing_models(&cfg.data_dir) {
         Some(m) => Some(m),
         None => {
@@ -248,7 +249,7 @@ pub async fn start_meeting(
             );
             match crate::models::ensure_models(
                 &cfg.data_dir,
-                &cfg.vad_model_url,
+                &cfg.segmentation_model_url,
                 &cfg.speaker_model_url,
             )
             .await

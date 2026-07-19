@@ -67,11 +67,14 @@ readout is captured back by loopback and re-enters the pipeline.
 ## Diarization
 
 Speaker labels are best-effort and local (design §7), always on. Sally uses
-sherpa-onnx: silero VAD segments remote speech and a 3D-Speaker ERes2Net
-embedding model feeds online clustering. The two model files (~28 MB)
-download automatically on the first meeting into `<data folder>/models/`;
-URLs are overridable in `.env`. Without the models (offline first run) a
-coarse built-in fallback keeps meetings working.
+the sherpa-onnx offline speaker-diarization pipeline: a pyannote
+segmentation model finds who-spoke-when regions and a NeMo TitaNet
+embedding model feeds agglomerative clustering. Live meetings re-run the
+pipeline over the buffered audio on a self-tuning cadence, so past labels
+heal as more of each voice is heard. The two model files (~44 MB) download
+automatically on the first meeting into `<data folder>/models/`; URLs and
+the clustering threshold are overridable in `.env`. Without the models
+(offline first run) a coarse built-in fallback keeps meetings working.
 
 Building from source needs libclang for bindgen (`winget install LLVM.LLVM`
 on Windows, `brew install llvm` on macOS; set `LIBCLANG_PATH` accordingly).
