@@ -35,6 +35,24 @@ const FB_SPEECH_RMS: f32 = 0.010;
 const MIN_SPLIT_MARGIN: f32 = 0.12;
 /// Sample cap for the O(n²) pairwise estimate.
 const THRESHOLD_SAMPLE: usize = 256;
+/// The low Otsu population must hold at least this share of pairs to count
+/// as a real cross-speaker population rather than an outlier's pair-star.
+const MIN_POP_SHARE: f32 = 0.10;
+/// Real cross-speaker speech still lands well above zero cosine on this
+/// embedding model; a low population mean under this is junk pairs
+/// (music, truncated audio, noise), not a second speaker.
+const MIN_CROSS_SIM: f32 = 0.15;
+/// A segment holding under this share of the estimation sample's weight may
+/// be dropped from threshold estimation as an outlier. It stays in the
+/// clustering itself and can still seed or join clusters.
+const OUTLIER_MAX_SHARE: f32 = 0.10;
+/// Collapse an established multi-speaker meeting to one speaker only after
+/// this many consecutive no-split estimates (mode hysteresis: one
+/// borderline pass must not relabel the whole timeline).
+const SINGLE_STICKY_PASSES: u32 = 3;
+/// EMA factor blending each new split threshold into the previous one, so
+/// the operating point drifts instead of jumping between passes.
+const THRESHOLD_EMA: f32 = 0.5;
 /// A cluster this light that also holds under 5% of total speech is noise:
 /// dissolved on each pass, members reassigned or left uncertain.
 const MIN_CLUSTER_WEIGHT: f32 = 4.0;
@@ -229,29 +247,44 @@ pub struct GlobalClusterer {
     /// merge/dissolve pass — safe because every pass relabels the entire
     /// timeline.
     centroids: Vec<Vec<f32>>,
-    /// Last estimated threshold and population margin, for the debug log.
+    /// Split params from the last pass that found one, EMA-smoothed. Held
+    /// across borderline passes (mode hysteresis).
+    last_split: Option<SplitParams>,
+    /// Consecutive passes whose estimate found no split.
+    single_streak: u32,
+    /// Diagnostics for the per-pass debug log.
     pub last_threshold: f32,
     pub last_margin: f32,
+    pub last_share: f32,
+    pub last_mode: &'static str,
+    pub last_totals: Vec<f32>,
 }
 
 /// Per-pass adaptive thresholds derived from the meeting's own similarity
-/// distribution.
-enum ThresholdEstimate {
-    /// No reliable bimodal structure: treat as one speaker.
-    Single,
-    Split {
-        join: f32,
-        seed_below: f32,
-        confident: f32,
-    },
+/// distribution. `None` from the estimator means no reliable bimodal
+/// structure: treat as one speaker (subject to hysteresis).
+#[derive(Clone, Copy)]
+struct SplitParams {
+    join: f32,
+    seed_below: f32,
+    confident: f32,
+    /// Centroid-vs-centroid merge threshold. Centroids are averaged and so
+    /// systematically more similar than raw segment pairs; merging them at
+    /// the segment-level `join` threshold over-merges real speakers.
+    merge: f32,
 }
 
 impl GlobalClusterer {
     fn new() -> Self {
         Self {
             centroids: Vec::new(),
+            last_split: None,
+            single_streak: 0,
             last_threshold: 0.0,
             last_margin: 0.0,
+            last_share: 0.0,
+            last_mode: "single",
+            last_totals: Vec::new(),
         }
     }
 
@@ -259,9 +292,31 @@ impl GlobalClusterer {
     /// cross-speaker pairs form two populations; the threshold maximizing
     /// between-class variance sits in the gap — wherever this recording's
     /// channel put it.
-    fn estimate_threshold(&mut self, segments: &[SegRec]) -> ThresholdEstimate {
-        // Heaviest segments only; O(n²) pairs.
-        let mut idx: Vec<usize> = (0..segments.len()).collect();
+    ///
+    /// Robustness: one bad segment (music sting, truncated audio) forms a
+    /// star of N-1 junk pairs whose gap dominates the between-class
+    /// variance, dragging the threshold far below the real cross-speaker
+    /// gap — every genuine speaker then merges into one cluster. Such a
+    /// low population (a sliver of pairs, or implausibly dissimilar for
+    /// speech) is traced to its highest-incidence segment; if that segment
+    /// is a token share of the sample's weight it is dropped from
+    /// estimation and the split re-run. A genuine rare speaker fails the
+    /// weight test and stays.
+    fn estimate_split(&mut self, segments: &[SegRec]) -> Option<SplitParams> {
+        self.last_threshold = 0.0;
+        self.last_margin = 0.0;
+        self.last_share = 0.0;
+        self.last_mode = "single";
+        // Seed-quality segments only: sub-800 ms embeddings are unreliable
+        // (their clustering weight is discounted for the same reason), so
+        // they must not shape the threshold. Fall back to everything while
+        // the meeting is still too young to filter.
+        let mut idx: Vec<usize> = (0..segments.len())
+            .filter(|&i| segments[i].can_seed)
+            .collect();
+        if idx.len() < 4 {
+            idx = (0..segments.len()).collect();
+        }
         idx.sort_by(|&a, &b| {
             segments[b]
                 .weight
@@ -269,57 +324,89 @@ impl GlobalClusterer {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         idx.truncate(THRESHOLD_SAMPLE);
-        let mut sims: Vec<f32> = Vec::with_capacity(idx.len() * (idx.len() - 1) / 2);
-        for i in 0..idx.len() {
-            for j in (i + 1)..idx.len() {
-                sims.push(cosine(
-                    &segments[idx[i]].embedding,
-                    &segments[idx[j]].embedding,
-                ));
+
+        // Up to two estimation outliers may be dropped before giving up.
+        for _attempt in 0..3 {
+            // (similarity, position-in-idx, position-in-idx) so junk pairs
+            // can be traced back to the segment causing them.
+            let mut pairs: Vec<(f32, usize, usize)> =
+                Vec::with_capacity(idx.len().saturating_sub(1) * idx.len() / 2);
+            for i in 0..idx.len() {
+                for j in (i + 1)..idx.len() {
+                    pairs.push((
+                        cosine(&segments[idx[i]].embedding, &segments[idx[j]].embedding),
+                        i,
+                        j,
+                    ));
+                }
             }
-        }
-        if sims.len() < 3 {
-            return ThresholdEstimate::Single;
-        }
-        sims.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        // Between-class variance maximization over sorted values.
-        let total: f32 = sims.iter().sum();
-        let n = sims.len() as f32;
-        let mut best: Option<(usize, f32)> = None;
-        let mut low_sum = 0.0f32;
-        for (k, &s) in sims.iter().enumerate().take(sims.len() - 1) {
-            low_sum += s;
-            let n0 = (k + 1) as f32;
-            let n1 = n - n0;
-            let mu0 = low_sum / n0;
-            let mu1 = (total - low_sum) / n1;
-            let between = (n0 / n) * (n1 / n) * (mu1 - mu0) * (mu1 - mu0);
-            if best.map(|(_, b)| between > b).unwrap_or(true) {
-                best = Some((k, between));
+            if pairs.len() < 3 {
+                return None;
             }
+            pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            // Between-class variance maximization over sorted values.
+            let total: f32 = pairs.iter().map(|p| p.0).sum();
+            let n = pairs.len() as f32;
+            let mut best: Option<(usize, f32)> = None;
+            let mut low_sum = 0.0f32;
+            for (k, p) in pairs.iter().enumerate().take(pairs.len() - 1) {
+                low_sum += p.0;
+                let n0 = (k + 1) as f32;
+                let n1 = n - n0;
+                let mu0 = low_sum / n0;
+                let mu1 = (total - low_sum) / n1;
+                let between = (n0 / n) * (n1 / n) * (mu1 - mu0) * (mu1 - mu0);
+                if best.map(|(_, b)| between > b).unwrap_or(true) {
+                    best = Some((k, between));
+                }
+            }
+            let Some((k, _)) = best else {
+                return None;
+            };
+            let n0 = k + 1;
+            let mu0 = pairs[..=k].iter().map(|p| p.0).sum::<f32>() / n0 as f32;
+            let mu1 =
+                pairs[k + 1..].iter().map(|p| p.0).sum::<f32>() / (pairs.len() - n0) as f32;
+            let margin = mu1 - mu0;
+            let share_low = n0 as f32 / n;
+            self.last_margin = margin;
+            self.last_share = share_low;
+            if share_low < MIN_POP_SHARE || mu0 < MIN_CROSS_SIM {
+                // Junk low population: drop its highest-incidence segment
+                // when light enough, and re-split. When the culprit is
+                // heavy (a real, merely unusual population) the split is
+                // kept as-is below.
+                let mut incidence = vec![0usize; idx.len()];
+                for p in &pairs[..=k] {
+                    incidence[p.1] += 1;
+                    incidence[p.2] += 1;
+                }
+                if let Some(cand) = (0..idx.len()).max_by_key(|&i| incidence[i]) {
+                    let sample_w: f32 = idx.iter().map(|&i| segments[i].weight).sum();
+                    if incidence[cand] > 0
+                        && segments[idx[cand]].weight / sample_w.max(1e-3) < OUTLIER_MAX_SHARE
+                    {
+                        idx.remove(cand);
+                        continue;
+                    }
+                }
+            }
+            // Weak separation, or the high population is a sliver: no
+            // trustworthy split.
+            if margin < MIN_SPLIT_MARGIN || share_low > 0.98 {
+                return None;
+            }
+            let t = (pairs[k].0 + pairs[k + 1].0) / 2.0;
+            self.last_threshold = t;
+            self.last_mode = "split";
+            return Some(SplitParams {
+                join: t,
+                seed_below: t - 0.04,
+                confident: (mu0 + 0.25 * margin).max(0.2),
+                merge: (t + mu1) / 2.0,
+            });
         }
-        let Some((k, _)) = best else {
-            return ThresholdEstimate::Single;
-        };
-        let n0 = k + 1;
-        let mu0 = sims[..=k].iter().sum::<f32>() / n0 as f32;
-        let mu1 = sims[k + 1..].iter().sum::<f32>() / (sims.len() - n0) as f32;
-        let margin = mu1 - mu0;
-        let share_low = n0 as f32 / n;
-        self.last_margin = margin;
-        // Weak separation, or one population is a sliver of noise pairs:
-        // no trustworthy split.
-        if margin < MIN_SPLIT_MARGIN || !(0.02..=0.98).contains(&share_low) {
-            self.last_threshold = 0.0;
-            return ThresholdEstimate::Single;
-        }
-        let t = (sims[k] + sims[k + 1]) / 2.0;
-        self.last_threshold = t;
-        ThresholdEstimate::Split {
-            join: t,
-            seed_below: t - 0.04,
-            confident: (mu0 + 0.25 * margin).max(0.2),
-        }
+        None
     }
 
     /// Global re-cluster. Returns one (label, confidence) per segment,
@@ -328,29 +415,65 @@ impl GlobalClusterer {
         if segments.is_empty() {
             return Vec::new();
         }
-        let (join_t, seed_t, conf_t) = match self.estimate_threshold(segments) {
-            ThresholdEstimate::Split {
-                join,
-                seed_below,
-                confident,
-            } => (join, seed_below, confident),
-            ThresholdEstimate::Single => {
-                // One speaker: weighted mean centroid, everything Speaker 1.
-                let dims = segments[0].embedding.len();
-                let mut mean = vec![0.0f32; dims];
-                for seg in segments {
-                    for (m, e) in mean.iter_mut().zip(&seg.embedding) {
-                        *m += e * seg.weight;
-                    }
-                }
-                normalize(&mut mean);
-                let out = segments
-                    .iter()
-                    .map(|seg| (SpeakerLabel::Speaker(1), cosine(&seg.embedding, &mean)))
-                    .collect();
-                self.centroids = vec![mean];
-                return out;
+        let params = match self.estimate_split(segments) {
+            Some(p) => {
+                self.single_streak = 0;
+                // EMA toward the new estimate: the operating point drifts
+                // with the meeting instead of jumping between passes.
+                let smoothed = match self.last_split {
+                    Some(prev) => SplitParams {
+                        join: prev.join + THRESHOLD_EMA * (p.join - prev.join),
+                        seed_below: prev.seed_below
+                            + THRESHOLD_EMA * (p.seed_below - prev.seed_below),
+                        confident: prev.confident
+                            + THRESHOLD_EMA * (p.confident - prev.confident),
+                        merge: prev.merge + THRESHOLD_EMA * (p.merge - prev.merge),
+                    },
+                    None => p,
+                };
+                self.last_split = Some(smoothed);
+                Some(smoothed)
             }
+            None => {
+                self.single_streak += 1;
+                // Mode hysteresis: an established multi-speaker meeting does
+                // not collapse on one borderline pass — hold the last split
+                // until the no-split verdict repeats.
+                if self.centroids.len() >= 2
+                    && self.single_streak < SINGLE_STICKY_PASSES
+                    && self.last_split.is_some()
+                {
+                    self.last_mode = "held";
+                    self.last_split
+                } else {
+                    self.last_split = None;
+                    None
+                }
+            }
+        };
+        let Some(SplitParams {
+            join: join_t,
+            seed_below: seed_t,
+            confident: conf_t,
+            merge: merge_t,
+        }) = params
+        else {
+            // One speaker: weighted mean centroid, everything Speaker 1.
+            let dims = segments[0].embedding.len();
+            let mut mean = vec![0.0f32; dims];
+            for seg in segments {
+                for (m, e) in mean.iter_mut().zip(&seg.embedding) {
+                    *m += e * seg.weight;
+                }
+            }
+            normalize(&mut mean);
+            let out = segments
+                .iter()
+                .map(|seg| (SpeakerLabel::Speaker(1), cosine(&seg.embedding, &mean)))
+                .collect();
+            self.centroids = vec![mean];
+            self.last_totals = vec![segments.iter().map(|s| s.weight).sum()];
+            return out;
         };
         // Warm start: k-means-style iterations seeded with the stable
         // centroids. Index identity is preserved across passes, which is
@@ -451,7 +574,7 @@ impl GlobalClusterer {
                         continue;
                     }
                     let sim = cosine(&working[i], &working[j]);
-                    if sim >= join_t
+                    if sim >= merge_t
                         && best_pair.map(|(_, _, s)| sim > s).unwrap_or(true)
                     {
                         best_pair = Some((i, j, sim));
@@ -493,14 +616,17 @@ impl GlobalClusterer {
 
         // Compact survivors into the new stable centroid list.
         let mut kept: Vec<Vec<f32>> = Vec::new();
+        let mut kept_totals: Vec<f32> = Vec::new();
         let mut final_index: Vec<Option<usize>> = vec![None; working.len()];
         for i in 0..working.len() {
             if resolve(&parent, i) == i && !dissolved[i] {
                 final_index[i] = Some(kept.len());
                 kept.push(working[i].clone());
+                kept_totals.push(totals[i]);
             }
         }
         self.centroids = kept;
+        self.last_totals = kept_totals;
 
         segments
             .iter()
@@ -719,20 +845,41 @@ impl DiarizerCore {
             .collect();
         if let Some(f) = self.debug.as_mut() {
             use std::io::Write;
-            let speakers = self.clusterer.centroids.len();
-            // Similarity distribution: decisive for threshold tuning.
-            let mut sims: Vec<f32> = rebuilt.iter().map(|r| r.confidence).collect();
+            let c = &self.clusterer;
+            let speakers = c.centroids.len();
+            // Confidence stats over concretely-labeled segments only; the
+            // hardcoded-0 Meeting fallbacks are counted separately so they
+            // cannot masquerade as real cosines.
+            let mut sims: Vec<f32> = rebuilt
+                .iter()
+                .filter(|r| matches!(r.label, SpeakerLabel::Speaker(_)))
+                .map(|r| r.confidence)
+                .collect();
             sims.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            let (min, med, max) = (
-                sims.first().copied().unwrap_or(0.0),
-                sims.get(sims.len() / 2).copied().unwrap_or(0.0),
-                sims.last().copied().unwrap_or(0.0),
-            );
+            let unlabeled = rebuilt.len() - sims.len();
+            let fmt = |v: Option<f32>| match v {
+                Some(v) => format!("{v:.2}"),
+                None => "-".into(),
+            };
+            let totals: Vec<f32> = c
+                .last_totals
+                .iter()
+                .map(|w| (w * 10.0).round() / 10.0)
+                .collect();
             let _ = writeln!(
                 f,
-                "recluster: {} segments -> {} speakers (sim min={min:.2} med={med:.2} max={max:.2})",
+                "recluster: {} segments -> {} speakers (mode={} t={:.2} margin={:.2} share={:.2} conf min={}/med={}/max={} unlabeled={} totals={:?})",
                 rebuilt.len(),
-                speakers
+                speakers,
+                c.last_mode,
+                c.last_threshold,
+                c.last_margin,
+                c.last_share,
+                fmt(sims.first().copied()),
+                fmt(sims.get(sims.len() / 2).copied()),
+                fmt(sims.last().copied()),
+                unlabeled,
+                totals,
             );
         }
         *self.ranges.lock().unwrap() = rebuilt;
@@ -1199,6 +1346,118 @@ mod tests {
             Some(SpeakerLabel::Speaker(1))
         );
         assert!(handle.version() >= 1, "finish must run a reconciliation pass");
+    }
+
+    // ---- Realistic-geometry cluster tests -------------------------------
+    //
+    // Compressed meeting audio puts same-speaker cosines near 0.8 and
+    // cross-speaker near 0.55 (see the threshold-constant comments). The
+    // fake-extractor tests above use orthogonal vectors and cannot catch
+    // threshold-estimation failures in that regime, which is exactly where
+    // the 2->1->2 speaker flapping observed in diar-debug.log lived.
+
+    const GEO_DIMS: usize = 40;
+    /// cos(A, B) = 0.69 on the speaker axes; with per-segment noise 0.5 on
+    /// a unique axis: same-speaker pairs ≈ 0.80, cross ≈ 0.55.
+    const GEO_A: [f32; 2] = [1.0, 0.0];
+    const GEO_B: [f32; 2] = [0.69, 0.723_8];
+
+    fn geo_seg(start_ms: u64, dir: &[f32; 2], noise_axis: usize) -> SegRec {
+        let mut e = vec![0.0f32; GEO_DIMS];
+        e[0] = dir[0];
+        e[1] = dir[1];
+        e[4 + noise_axis] = 0.5;
+        normalize(&mut e);
+        SegRec {
+            start_ms,
+            end_ms: start_ms + 2000,
+            embedding: e,
+            weight: 2.0,
+            can_seed: true,
+        }
+    }
+
+    /// Junk segment (music sting / truncated audio): near-orthogonal to
+    /// every voice.
+    fn junk_seg(start_ms: u64) -> SegRec {
+        let mut e = vec![0.0f32; GEO_DIMS];
+        e[2] = 1.0;
+        SegRec {
+            start_ms,
+            end_ms: start_ms + 2000,
+            embedding: e,
+            weight: 2.0,
+            can_seed: true,
+        }
+    }
+
+    fn two_speaker_segs() -> Vec<SegRec> {
+        let mut segs: Vec<SegRec> = (0..14)
+            .map(|i| geo_seg(i as u64 * 2000, &GEO_A, i))
+            .collect();
+        segs.extend((0..6).map(|i| geo_seg(30_000 + i as u64 * 2000, &GEO_B, 14 + i)));
+        segs
+    }
+
+    #[test]
+    fn outlier_segment_does_not_collapse_speakers() {
+        // One junk segment's pair-star must not hijack the Otsu threshold
+        // and merge the two real speakers.
+        let mut segs = two_speaker_segs();
+        segs.push(junk_seg(50_000));
+        let mut c = GlobalClusterer::new();
+        let labels = c.recluster(&segs);
+        let a_label = labels[0].0.clone();
+        let b_label = labels[14].0.clone();
+        assert!(matches!(a_label, SpeakerLabel::Speaker(_)), "{a_label:?}");
+        assert!(matches!(b_label, SpeakerLabel::Speaker(_)), "{b_label:?}");
+        assert_ne!(a_label, b_label, "speakers merged by outlier");
+        assert!(labels[..14].iter().all(|(l, _)| *l == a_label));
+        assert!(labels[14..20].iter().all(|(l, _)| *l == b_label));
+        // The junk segment itself must not earn a concrete speaker.
+        assert_eq!(labels[20].0, SpeakerLabel::Meeting);
+    }
+
+    #[test]
+    fn speaker_count_stable_as_segments_accumulate() {
+        // Replays the diar-debug.log failure: two established speakers,
+        // then an unreliable segment arrives mid-meeting; later passes must
+        // not flap 2 -> 1 -> 2.
+        let mut c = GlobalClusterer::new();
+        let mut segs: Vec<SegRec> = (0..14)
+            .map(|i| geo_seg(i as u64 * 2000, &GEO_A, i))
+            .collect();
+        c.recluster(&segs);
+        segs.extend((0..6).map(|i| geo_seg(30_000 + i as u64 * 2000, &GEO_B, 14 + i)));
+        let labels = c.recluster(&segs);
+        assert_ne!(labels[0].0, labels[14].0, "speakers not separated");
+
+        segs.push(junk_seg(50_000));
+        let labels = c.recluster(&segs);
+        assert_ne!(labels[0].0, labels[14].0, "outlier collapsed speakers");
+        assert!(matches!(labels[0].0, SpeakerLabel::Speaker(_)));
+        assert!(matches!(labels[14].0, SpeakerLabel::Speaker(_)));
+
+        segs.extend((0..4).map(|i| geo_seg(60_000 + i as u64 * 2000, &GEO_A, 20 + i)));
+        let labels = c.recluster(&segs);
+        assert_ne!(labels[0].0, labels[14].0, "speakers merged after outlier");
+        assert_eq!(labels[0].0, labels[24].0, "same voice drifted to a new label");
+    }
+
+    #[test]
+    fn single_speaker_with_junk_segment_stays_single() {
+        // The outlier trim must not manufacture a second speaker out of a
+        // one-speaker meeting either.
+        let mut segs: Vec<SegRec> = (0..12)
+            .map(|i| geo_seg(i as u64 * 2000, &GEO_A, i))
+            .collect();
+        segs.push(junk_seg(30_000));
+        let mut c = GlobalClusterer::new();
+        let labels = c.recluster(&segs);
+        assert!(labels[..12]
+            .iter()
+            .all(|(l, _)| *l == SpeakerLabel::Speaker(1)));
+        assert_eq!(c.centroids.len(), 1);
     }
 
     #[test]
