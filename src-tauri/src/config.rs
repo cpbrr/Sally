@@ -22,6 +22,8 @@ const KEY_MIC_DEVICE: &str = "SALLY_MIC_DEVICE";
 const KEY_SYSTEM_DEVICE: &str = "SALLY_SYSTEM_DEVICE";
 const KEY_READOUT: &str = "SALLY_READOUT";
 const KEY_LIVE_API_VERSION: &str = "SALLY_LIVE_API_VERSION";
+const KEY_SPEAKER_SPLIT: &str = "SALLY_SPEAKER_SPLIT";
+const KEY_SEG_MODEL_URL: &str = "SALLY_SEGMENTATION_MODEL_URL";
 
 // The documented WebSocket endpoint for live translation is v1beta; the
 // session still auto-flips to v1alpha if setup keeps getting rejected.
@@ -48,6 +50,12 @@ pub struct AppConfig {
     /// Live API version (`v1alpha` or `v1beta`). Preview models usually live
     /// on v1alpha; the session flips automatically if setup is rejected.
     pub live_api_version: String,
+    /// Split "Meeting" lines when a different remote voice takes over
+    /// (segmentation model on the system lane). On by default;
+    /// SALLY_SPEAKER_SPLIT=off disables it.
+    pub speaker_split_enabled: bool,
+    /// Override URL for the segmentation model download (air-gapped setups).
+    pub segmentation_model_url: String,
 }
 
 impl AppConfig {
@@ -67,6 +75,8 @@ impl AppConfig {
             capture_app: String::new(),
             readout_enabled: false,
             live_api_version: DEFAULT_LIVE_API_VERSION.into(),
+            speaker_split_enabled: true,
+            segmentation_model_url: String::new(),
         }
     }
 
@@ -125,6 +135,8 @@ impl AppConfig {
         if !ver.is_empty() {
             cfg.live_api_version = ver;
         }
+        cfg.speaker_split_enabled = get(KEY_SPEAKER_SPLIT) != "off";
+        cfg.segmentation_model_url = get(KEY_SEG_MODEL_URL);
         Ok(cfg)
     }
 
@@ -156,6 +168,11 @@ impl AppConfig {
             if self.readout_enabled { "on" } else { "off" }.into(),
         );
         map.insert(KEY_LIVE_API_VERSION.into(), self.live_api_version.clone());
+        map.insert(
+            KEY_SPEAKER_SPLIT.into(),
+            if self.speaker_split_enabled { "on" } else { "off" }.into(),
+        );
+        map.insert(KEY_SEG_MODEL_URL.into(), self.segmentation_model_url.clone());
         let mut out = String::from(
             "# Sally configuration. The API key is stored in plain text by design;\n\
              # anyone who can read this folder can obtain it.\n",

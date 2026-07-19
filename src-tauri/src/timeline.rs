@@ -103,6 +103,20 @@ impl Assembler {
         self.open.as_ref().map(|e| e.original.chars().count()).unwrap_or(0)
     }
 
+    /// Whether the open entry is (so far) attributed to the microphone.
+    /// Speaker-change boundaries from the system lane must not split the
+    /// user's own turns.
+    pub fn open_mic_dominated(&self) -> bool {
+        self.open
+            .as_ref()
+            .map(|e| {
+                e.speech_chunks > 0
+                    && e.mic_active_chunks as f32 / e.speech_chunks as f32
+                        >= self.mic_attribution_threshold
+            })
+            .unwrap_or(false)
+    }
+
     /// Rotate the turn: freeze the open entry's original and let its
     /// translation finish streaming. Any previously closing entry is
     /// finalized and returned.

@@ -124,6 +124,7 @@ impl Pipeline {
             mic: mic_i16,
             mic_active: mic_rms > MIC_ACTIVITY_RMS,
             system_active: system_rms > SYSTEM_ACTIVITY_RMS,
+            system,
         };
         self.seq += 1;
         Some(chunk)
