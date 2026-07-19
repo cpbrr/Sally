@@ -10,7 +10,6 @@ const en = {
   statusEnded: "Ended",
   statusIdle: "Ready",
   statusStorageError: "Storage problem",
-  statusDownloadingModels: "Downloading speaker models…",
   // title bar
   pin: "Keep on top",
   unpin: "Stop keeping on top",
@@ -101,7 +100,6 @@ const en = {
   captureSourceHint:
     "Pick the meeting app to capture only its audio. Sally's own read-aloud voice is then never captured, which removes echo. The app must be playing audio to appear in this list.",
   refresh: "Refresh",
-  diarization: "Speaker detection (diarization)",
   alwaysOnTopDefault: "Always on top by default",
   liveModel: "Live model",
   cleanupModel: "Cleanup model",
@@ -127,7 +125,6 @@ const vi: typeof en = {
   statusEnded: "Đã kết thúc",
   statusIdle: "Sẵn sàng",
   statusStorageError: "Lỗi lưu trữ",
-  statusDownloadingModels: "Đang tải mô hình nhận diện giọng…",
   pin: "Giữ trên cùng",
   unpin: "Bỏ giữ trên cùng",
   readoutOn: "Đọc to bản dịch (bỏ qua lời nói đã ở ngôn ngữ đích)",
@@ -211,7 +208,6 @@ const vi: typeof en = {
   captureSourceHint:
     "Chọn ứng dụng họp để chỉ thu âm thanh của nó. Giọng đọc bản dịch của Sally sẽ không bị thu lại, loại bỏ tiếng vọng. Ứng dụng phải đang phát âm thanh mới xuất hiện trong danh sách.",
   refresh: "Làm mới",
-  diarization: "Nhận diện người nói",
   alwaysOnTopDefault: "Luôn trên cùng theo mặc định",
   liveModel: "Mô hình trực tiếp",
   cleanupModel: "Mô hình dọn bản ghi",

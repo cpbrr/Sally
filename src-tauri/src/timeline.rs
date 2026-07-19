@@ -1,11 +1,10 @@
 //! Timeline assembler (design §4.2 item 5, §5 step 6).
 //!
 //! Aligns original-transcript fragments, translated fragments, the session
-//! clock, chunk sequence numbers, mic activity, and diarization ranges into
-//! stable timeline entries. Entries are provisional while a turn is open and
-//! final once the turn completes; finalized entries never change.
+//! clock, chunk sequence numbers, and mic activity into stable timeline
+//! entries. Entries are provisional while a turn is open and final once the
+//! turn completes; finalized entries never change.
 
-use crate::diarization::{SpeakerLabel, SpeakerLookup};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -104,17 +103,11 @@ impl Assembler {
         self.open.as_ref().map(|e| e.original.chars().count()).unwrap_or(0)
     }
 
-    /// Speaker changed: freeze the open entry's original and let its
+    /// Rotate the turn: freeze the open entry's original and let its
     /// translation finish streaming. Any previously closing entry is
     /// finalized and returned.
-    pub fn split_for_speaker_change(
-        &mut self,
-        diarizer: Option<&dyn SpeakerLookup>,
-    ) -> Option<TimelineEntry> {
-        let finished = self
-            .closing
-            .take()
-            .and_then(|e| self.seal_entry(e, diarizer));
+    pub fn rotate_turn(&mut self) -> Option<TimelineEntry> {
+        let finished = self.closing.take().and_then(|e| self.seal_entry(e));
         self.closing = self.open.take();
         finished
     }
@@ -151,11 +144,7 @@ impl Assembler {
         })
     }
 
-    fn seal_entry(
-        &mut self,
-        e: OpenEntry,
-        diarizer: Option<&dyn SpeakerLookup>,
-    ) -> Option<TimelineEntry> {
+    fn seal_entry(&mut self, e: OpenEntry) -> Option<TimelineEntry> {
         if e.original.trim().is_empty() && e.translated.trim().is_empty() {
             return None;
         }
@@ -165,12 +154,9 @@ impl Assembler {
             0.0
         };
         let speaker = if mic_fraction >= self.mic_attribution_threshold {
-            SpeakerLabel::You.display()
+            "You".to_string()
         } else {
-            diarizer
-                .and_then(|d| d.label_for_span(e.start_ms, e.last_ms.max(e.start_ms + 1)))
-                .unwrap_or(SpeakerLabel::Meeting)
-                .display()
+            "Meeting".to_string()
         };
         let entry = TimelineEntry {
             index: self.next_index,
@@ -187,15 +173,15 @@ impl Assembler {
 
     /// Finalize everything (turn complete, forced flush, or meeting end):
     /// the closing entry first, then the open one, in timeline order.
-    pub fn finalize_turn(&mut self, diarizer: Option<&dyn SpeakerLookup>) -> Vec<TimelineEntry> {
+    pub fn finalize_turn(&mut self) -> Vec<TimelineEntry> {
         let mut out = Vec::new();
         if let Some(e) = self.closing.take() {
-            if let Some(entry) = self.seal_entry(e, diarizer) {
+            if let Some(entry) = self.seal_entry(e) {
                 out.push(entry);
             }
         }
         if let Some(e) = self.open.take() {
-            if let Some(entry) = self.seal_entry(e, diarizer) {
+            if let Some(entry) = self.seal_entry(e) {
                 out.push(entry);
             }
         }
@@ -247,7 +233,7 @@ mod tests {
         a.push_original("world", 1400);
         a.push_translated("Xin chào ", 1200);
         a.push_translated("thế giới", 1600);
-        let e = a.finalize_turn(None).pop().expect("entry");
+        let e = a.finalize_turn().pop().expect("entry");
         assert_eq!(e.original, "Hello world");
         assert_eq!(e.translated, "Xin chào thế giới");
         assert_eq!(e.start_ms, 1000);
@@ -262,7 +248,7 @@ mod tests {
         for _ in 0..10 {
             a.push_activity(true, false, 0);
         }
-        let e = a.finalize_turn(None).pop().expect("entry");
+        let e = a.finalize_turn().pop().expect("entry");
         assert_eq!(e.speaker, "You");
     }
 
@@ -271,12 +257,12 @@ mod tests {
         let mut a = Assembler::new();
         a.push_original("first speaker words", 1000);
         // Speaker changes before the translation arrives.
-        let done = a.split_for_speaker_change(None);
+        let done = a.rotate_turn();
         assert!(done.is_none(), "nothing was closing yet");
         a.push_original("second speaker words", 3000);
         // Late translation belongs to the first (closing) entry.
         a.push_translated("bản dịch của người一", 3200);
-        let entries = a.finalize_turn(None);
+        let entries = a.finalize_turn();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].original, "first speaker words");
         assert_eq!(entries[0].translated, "bản dịch của người一");
@@ -288,14 +274,14 @@ mod tests {
     fn second_split_finalizes_previous_closing() {
         let mut a = Assembler::new();
         a.push_original("one", 0);
-        assert!(a.split_for_speaker_change(None).is_none());
+        assert!(a.rotate_turn().is_none());
         a.push_original("two", 1000);
         a.push_translated("một", 1100);
-        let sealed = a.split_for_speaker_change(None).expect("first entry sealed");
+        let sealed = a.rotate_turn().expect("first entry sealed");
         assert_eq!(sealed.original, "one");
         assert_eq!(sealed.translated, "một");
         a.push_original("three", 2000);
-        let rest = a.finalize_turn(None);
+        let rest = a.finalize_turn();
         assert_eq!(rest.len(), 2);
         assert_eq!(rest[0].original, "two");
         assert_eq!(rest[1].original, "three");
@@ -314,7 +300,7 @@ mod tests {
         for _ in 0..30 {
             a.push_activity(false, false, 0);
         }
-        let e = a.finalize_turn(None).pop().expect("entry");
+        let e = a.finalize_turn().pop().expect("entry");
         assert_eq!(e.speaker, "You");
     }
 
@@ -328,7 +314,7 @@ mod tests {
         for _ in 0..10 {
             a.push_activity(false, true, 0);
         }
-        let e = a.finalize_turn(None).pop().expect("entry");
+        let e = a.finalize_turn().pop().expect("entry");
         assert_eq!(e.speaker, "Meeting");
     }
 
@@ -336,17 +322,17 @@ mod tests {
     fn empty_turn_produces_nothing() {
         let mut a = Assembler::new();
         a.push_original("   ", 0);
-        assert!(a.finalize_turn(None).is_empty());
+        assert!(a.finalize_turn().is_empty());
     }
 
     #[test]
     fn indices_are_stable_and_increasing() {
         let mut a = Assembler::new();
         a.push_original("one", 0);
-        let e1 = a.finalize_turn(None).pop().unwrap();
+        let e1 = a.finalize_turn().pop().unwrap();
         let g = a.gap(5000, 9000);
         a.push_original("two", 10_000);
-        let e2 = a.finalize_turn(None).pop().unwrap();
+        let e2 = a.finalize_turn().pop().unwrap();
         assert_eq!((e1.index, g.index, e2.index), (0, 1, 2));
         assert_eq!(g.kind, EntryKind::Gap);
     }

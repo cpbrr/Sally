@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import {
   api,
   onEntry,
-  onEntryUpdate,
   onPartial,
   onStatus,
   onWarning,
@@ -78,7 +77,6 @@ export default function App() {
     setStatus,
     setWarning,
     addEntry,
-    updateEntrySpeakers,
     setPartial,
     setPaused,
   } = useSally();
@@ -97,7 +95,6 @@ export default function App() {
         if (s.state === "live") setPaused(false);
       }),
       onEntry((e) => addEntry(e)),
-      onEntryUpdate((u) => updateEntrySpeakers(u)),
       onPartial((p) => setPartial(p)),
       onWarning((w) => setWarning(w)),
     ];

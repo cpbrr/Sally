@@ -9,7 +9,7 @@ use crate::store::MeetingStore;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Manager, State};
 use tokio::sync::Mutex;
 
 #[derive(Default)]
@@ -236,33 +236,7 @@ pub async fn start_meeting(
             *state.config.lock().await = Some(cfg.clone());
         }
     }
-    // Diarization models (pyannote segmentation + speaker embedding):
-    // download once on first meeting (~44 MB). If that fails (offline), the
-    // session falls back to the built-in diarizer rather than blocking the
-    // meeting.
-    let models = match crate::models::existing_models(&cfg.data_dir) {
-        Some(m) => Some(m),
-        None => {
-            let _ = app.emit(
-                "sally://status",
-                serde_json::json!({ "state": "downloading-models", "detail": "" }),
-            );
-            match crate::models::ensure_models(
-                &cfg.data_dir,
-                &cfg.segmentation_model_url,
-                &cfg.speaker_model_url,
-            )
-            .await
-            {
-                Ok(m) => Some(m),
-                Err(e) => {
-                    log::error!("diarization model download failed: {e}");
-                    None
-                }
-            }
-        }
-    };
-    let handle = crate::session::start(app, cfg, models)?;
+    let handle = crate::session::start(app, cfg)?;
     *session_guard = Some(handle);
     Ok(())
 }
