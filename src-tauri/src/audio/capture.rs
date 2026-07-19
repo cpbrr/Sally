@@ -3,9 +3,9 @@
 //! Windows: microphone via default/selected input device, system audio via
 //! WASAPI loopback (an input stream opened on an output device).
 //!
-//! macOS: microphone works through cpal; system audio requires a
-//! ScreenCaptureKit adapter that is not implemented in this scaffold and
-//! reports a clear error instead of failing silently.
+//! macOS: microphone works through cpal; system audio is captured from a
+//! loopback *input* device (BlackHole or similar) that the user routes
+//! meeting audio into. Without one, a clear error explains the setup.
 
 use super::{AudioSource, RawFrame};
 use crate::error::{Result, SallyError};
@@ -39,8 +39,18 @@ pub fn list_input_devices() -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Candidates for the "system audio" picker. Windows: output devices
+/// (WASAPI loopback opens an input stream on them). macOS: loopback *input*
+/// devices such as BlackHole — capturing an output device directly is not
+/// possible without ScreenCaptureKit.
 pub fn list_output_devices() -> Vec<String> {
     let host = cpal::default_host();
+    #[cfg(target_os = "macos")]
+    return host
+        .input_devices()
+        .map(|devs| devs.filter_map(|d| d.name().ok()).collect())
+        .unwrap_or_default();
+    #[cfg(not(target_os = "macos"))]
     host.output_devices()
         .map(|devs| devs.filter_map(|d| d.name().ok()).collect())
         .unwrap_or_default()
@@ -117,6 +127,7 @@ fn find_input_device(host: &cpal::Host, name: &str) -> Option<cpal::Device> {
         .or_else(|| host.default_input_device())
 }
 
+#[cfg(not(target_os = "macos"))]
 fn find_output_device(host: &cpal::Host, name: &str) -> Option<cpal::Device> {
     if name.is_empty() {
         return host.default_output_device();
@@ -159,15 +170,24 @@ fn spawn_system_thread(
     stop: Arc<AtomicBool>,
 ) -> Result<std::thread::JoinHandle<()>> {
     #[cfg(target_os = "macos")]
-    {
-        let _ = (device_name, session_start, tx);
-        let _ = stop;
-        return Err(SallyError::Audio(
-            "system-audio capture on macOS requires the ScreenCaptureKit adapter, \
-             which is not implemented yet"
-                .into(),
-        ));
-    }
+    return spawn_capture_thread(move || {
+        let host = cpal::default_host();
+        // System audio arrives through a loopback input device (BlackHole
+        // or similar) that the user routes meeting audio into. Selected by
+        // name; with no selection, look for a BlackHole-style device.
+        let device = find_macos_loopback_device(&host, &device_name).ok_or_else(|| {
+            SallyError::Audio(
+                "system audio on macOS needs a loopback input device such as \
+                 BlackHole: install one, route meeting audio to it (Multi-Output \
+                 Device), and select it as the system audio device in Settings"
+                    .into(),
+            )
+        })?;
+        let config = device
+            .default_input_config()
+            .map_err(|e| SallyError::Audio(format!("loopback config: {e}")))?;
+        build_stream(&device, &config, AudioSource::System, session_start, tx)
+    }, stop);
     #[cfg(not(target_os = "macos"))]
     spawn_capture_thread(move || {
         let host = cpal::default_host();
@@ -179,6 +199,28 @@ fn spawn_system_thread(
             .map_err(|e| SallyError::Audio(format!("loopback config: {e}")))?;
         build_stream(&device, &config, AudioSource::System, session_start, tx)
     }, stop)
+}
+
+/// A named loopback input device, or any device whose name suggests a
+/// loopback driver when nothing is selected. Never falls back to the
+/// default input: that is the microphone, and capturing it twice would
+/// duplicate the user's voice into the "Meeting" lane.
+#[cfg(target_os = "macos")]
+fn find_macos_loopback_device(host: &cpal::Host, name: &str) -> Option<cpal::Device> {
+    let devices: Vec<cpal::Device> = host.input_devices().ok()?.collect();
+    if !name.is_empty() {
+        return devices
+            .into_iter()
+            .find(|d| d.name().map(|n| n == name).unwrap_or(false));
+    }
+    devices.into_iter().find(|d| {
+        d.name()
+            .map(|n| {
+                let n = n.to_lowercase();
+                n.contains("blackhole") || n.contains("loopback") || n.contains("soundflower")
+            })
+            .unwrap_or(false)
+    })
 }
 
 fn spawn_capture_thread(
