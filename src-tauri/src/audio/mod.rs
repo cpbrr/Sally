@@ -50,6 +50,9 @@ pub struct MixedChunk {
     pub mic_active: bool,
     /// True when system audio carried speech-level energy in this chunk.
     pub system_active: bool,
+    /// System-lane-only copy for the speaker-change detector. Stays in
+    /// memory like every other buffer here; audio never touches disk.
+    pub system: Vec<f32>,
 }
 
 /// Convert f32 samples in [-1, 1] to i16 with clamping.

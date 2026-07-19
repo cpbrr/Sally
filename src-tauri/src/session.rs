@@ -10,6 +10,7 @@ use crate::config::AppConfig;
 use crate::error::{Result, SallyError};
 use crate::gemini::live::{self, LiveEvent};
 use crate::readout::ReadoutGate;
+use crate::split::{self, SplitDetector};
 use crate::store::{MeetingStore, RecoveryJournal};
 use crate::timeline::Assembler;
 use serde::Serialize;
@@ -31,6 +32,9 @@ const JOURNAL_INTERVAL: Duration = Duration::from_secs(5);
 /// A turn left open this long without new fragments is force-finalized so
 /// panels do not accumulate an ever-growing provisional entry.
 const TURN_IDLE_FLUSH_MS: u64 = 7_000;
+/// A speaker-change boundary only splits an entry that already carries this
+/// much original text; anything shorter reads fine on one line.
+const MIN_SPLIT_CHARS: usize = 12;
 
 pub enum Control {
     Pause,
@@ -195,6 +199,36 @@ async fn run_session(
     // played translation coming back through loopback, and are dropped.
     let mut last_playback_at: Option<Instant> = None;
 
+    // Speaker-change splitting: the detector arrives asynchronously once
+    // the model is ensured (first run downloads ~6 MB). The meeting never
+    // waits for it; until it lands, entries just split on turns alone.
+    let mut split_det: Option<SplitDetector> = None;
+    let mut split_rx: Option<oneshot::Receiver<SplitDetector>> = None;
+    if config.speaker_split_enabled {
+        let (tx, rx) = oneshot::channel();
+        split_rx = Some(rx);
+        let data_dir = config.data_dir.clone();
+        let url = config.segmentation_model_url.clone();
+        tokio::spawn(async move {
+            match split::ensure_model(&data_dir, &url).await {
+                // Model load happens on the worker thread; start() blocks
+                // until it reports, so keep it off the async runtime.
+                Ok(path) => match tokio::task::spawn_blocking(move || {
+                    SplitDetector::start(&path)
+                })
+                .await
+                {
+                    Ok(Ok(d)) => {
+                        let _ = tx.send(d);
+                    }
+                    Ok(Err(e)) => log::warn!("speaker split disabled: {e}"),
+                    Err(e) => log::warn!("speaker split disabled: {e}"),
+                },
+                Err(e) => log::warn!("speaker split disabled: {e}"),
+            }
+        });
+    }
+
     emit_status(&app, "connecting", "");
     let mut conn: Option<live::LiveConnection> = None;
     let mut api_version = config.live_api_version.clone();
@@ -239,6 +273,41 @@ async fn run_session(
                 }
             }
 
+            // The speaker-change detector finished loading.
+            det = async { split_rx.as_mut().unwrap().await }, if split_rx.is_some() => {
+                split_rx = None;
+                if let Ok(d) = det {
+                    log::info!("speaker split active");
+                    split_det = Some(d);
+                }
+            }
+
+            // A remote voice handed off to a different one: rotate the turn
+            // so the next words start a new "Meeting" line. Translation for
+            // the frozen entry keeps streaming into it (rotate_turn).
+            boundary = async { split_det.as_mut().unwrap().boundary_rx.recv().await },
+                if split_det.is_some() => {
+                match boundary {
+                    Some(_t_ms) => {
+                        if !paused
+                            && !assembler.open_mic_dominated()
+                            && assembler.open_original_len() >= MIN_SPLIT_CHARS
+                        {
+                            if let Some(sealed) = assembler.rotate_turn() {
+                                emit_sealed(&app, sealed, &mut store, &config,
+                                            &mut speakers, &mut sealed_entries);
+                            }
+                            emit_partial(&app, &assembler);
+                        }
+                    }
+                    None => {
+                        // Worker thread ended (it never does unless the
+                        // session is tearing down): stop selecting on it.
+                        split_det = None;
+                    }
+                }
+            }
+
             // A background reconnect attempt succeeded.
             newconn = async { reconnect_rx.as_mut().unwrap().await }, if reconnect_rx.is_some() => {
                 reconnect_rx = None;
@@ -279,6 +348,16 @@ async fn run_session(
                         last_playback_at = Some(Instant::now());
                     }
                     assembler.push_activity(chunk.mic_active, chunk.system_active, chunk.t_ms);
+                    if let Some(d) = split_det.as_ref() {
+                        // Readout playback is our own translated voice in
+                        // the loopback: fed as silence so the detector
+                        // never calls it a new speaker.
+                        let _ = d.audio_tx.send(split::Feed {
+                            samples: chunk.system,
+                            t_ms: chunk.t_ms,
+                            suppress: readout_playing,
+                        });
+                    }
                     if let Some(c) = conn.as_ref() {
                         // try_send: a stalled socket must not block audio.
                         if c.audio_tx.try_send(chunk.mixed).is_err() {
