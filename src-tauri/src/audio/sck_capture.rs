@@ -77,16 +77,32 @@ impl SCStreamOutputTrait for AudioHandler {
 /// Applications ScreenCaptureKit can see right now, for the per-app capture
 /// picker. Requires Screen Recording permission to populate; empty (not an
 /// error) when it isn't granted yet, matching the Windows picker's shape.
+///
+/// `SCShareableContent::applications()` lists every running process with
+/// any UI presence at all — background agents like CoreServicesUIAgent,
+/// loginwindow, universalcontrol, coreauthd have no audio of their own and
+/// just clutter the picker. Only apps that own at least one on-screen
+/// window are kept, which is the closest signal this crate exposes to
+/// "an app the user would actually recognize."
 pub fn list_audio_apps() -> Vec<String> {
     let Ok(content) = SCShareableContent::get() else {
         return Vec::new();
     };
-    content
+    let visible_owners: std::collections::HashSet<String> = content
+        .windows()
+        .into_iter()
+        .filter(SCWindow::is_on_screen)
+        .filter_map(|w| w.owning_application())
+        .map(|a| a.application_name())
+        .filter(|n| !n.is_empty())
+        .collect();
+    let names: std::collections::BTreeSet<String> = content
         .applications()
         .into_iter()
         .map(|a| a.application_name())
-        .filter(|n| !n.is_empty())
-        .collect()
+        .filter(|n| !n.is_empty() && visible_owners.contains(n))
+        .collect();
+    names.into_iter().collect()
 }
 
 /// Capture system audio into `tx` until `stop` is set. `capture_app`, when

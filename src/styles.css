@@ -301,14 +301,27 @@ select:focus, input:focus { outline: 1px solid var(--accent); }
   min-height: 40px;
 }
 
-.session-bar .error-text {
-  flex: 1;
-  min-width: 0;
-  white-space: pre-wrap;
-  text-align: right;
-  max-height: 140px;
+.issue-indicator { position: relative; flex: none; }
+.issue-indicator .icon-btn.issue-error { color: var(--danger); }
+.issue-indicator .icon-btn.issue-warn { color: var(--warn); }
+.issue-bubble {
+  position: absolute;
+  top: 30px;
+  right: 0;
+  z-index: 40;
+  width: 260px;
+  max-height: 200px;
   overflow-y: auto;
+  padding: 8px 10px;
+  background: rgb(35, 39, 47);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
 }
+.issue-bubble.issue-error { border-color: var(--danger); color: var(--danger); }
+.issue-bubble.issue-warn { border-color: var(--warn); color: var(--warn); }
 
 .elapsed {
   font-variant-numeric: tabular-nums;
@@ -422,15 +435,6 @@ input[type="range"] {
 .error-text { color: var(--danger); font-size: 12px; }
 .warn-text { color: var(--warn); font-size: 12px; }
 .ok-text { color: var(--ok); font-size: 12px; }
-
-.session-bar .warn-text {
-  flex: 1;
-  min-width: 0;
-  white-space: pre-wrap;
-  max-height: 140px;
-  overflow-y: auto;
-  text-align: right;
-}
 
 .setup-steps {
   color: var(--text-dim);

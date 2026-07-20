@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { CornerTools } from "./CornerTools";
-import { IconDoc, IconRefresh } from "./Icons";
+import { IconDoc, IconRefresh, IconWarning } from "./Icons";
 import { useSally } from "../store";
 
 function formatElapsed(ms: number): string {
@@ -12,6 +12,54 @@ function formatElapsed(ms: number): string {
   const mm = String(m).padStart(2, "0");
   const ss = String(s).padStart(2, "0");
   return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+/// Replaces the old always-visible inline error/warning text with a small
+/// warning-icon button; clicking it opens a bubble below with the full
+/// message, closed by clicking it again or anywhere outside.
+function IssueIndicator({
+  message,
+  isError,
+}: {
+  message: string;
+  isError: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", onClick);
+    return () => window.removeEventListener("mousedown", onClick);
+  }, [open]);
+
+  useEffect(() => {
+    if (!message) setOpen(false);
+  }, [message]);
+
+  if (!message) return null;
+
+  return (
+    <div className="issue-indicator" ref={ref}>
+      <button
+        className={`icon-btn ${isError ? "issue-error" : "issue-warn"}`}
+        title={message}
+        onClick={() => setOpen(!open)}
+      >
+        <IconWarning />
+      </button>
+      {open && (
+        <div className={`issue-bubble ${isError ? "issue-error" : "issue-warn"}`}>
+          {message}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function SessionBar() {
@@ -152,24 +200,22 @@ export function SessionBar() {
             </button>
           </>
         )}
-        <CornerTools />
         <span className="spacer" />
-        {error ? (
-          <span className="error-text" title={error}>
-            {error}
-          </span>
-        ) : (status === "reconnecting" || status === "storage-error") &&
-          statusDetail ? (
-          <span className="error-text" title={statusDetail}>
-            {statusDetail}
-          </span>
-        ) : (
-          warning && (
-            <span className="warn-text" title={warning}>
-              {warning}
-            </span>
-          )
-        )}
+        <IssueIndicator
+          message={
+            error ||
+            ((status === "reconnecting" || status === "storage-error") &&
+              statusDetail) ||
+            warning ||
+            ""
+          }
+          isError={
+            !!error ||
+            ((status === "reconnecting" || status === "storage-error") &&
+              !!statusDetail)
+          }
+        />
+        <CornerTools />
       </div>
       {confirmEnd && (
         <div className="overlay">
