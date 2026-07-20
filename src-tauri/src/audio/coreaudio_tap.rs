@@ -18,6 +18,7 @@
 
 use super::{AudioSource, RawFrame};
 use crate::error::{Result, SallyError};
+use objc2::top_level_traits::AnyThread;
 use objc2_core_audio::{
     kAudioAggregateDeviceIsPrivateKey, kAudioAggregateDeviceIsStackedKey,
     kAudioAggregateDeviceMainSubDeviceKey, kAudioAggregateDeviceNameKey,
@@ -52,13 +53,6 @@ struct TapContext {
     sample_rate: u32,
 }
 
-struct TapHandles {
-    tap_id: AudioObjectID,
-    aggregate_id: AudioObjectID,
-    io_proc_id: AudioDeviceIOProcID,
-    ctx: *mut TapContext,
-}
-
 /// Capture the whole system's audio (minus our own process) into `tx` until
 /// `stop` is set. Fails cleanly when the process-tap API rejects the
 /// request (permission denied, or the running OS predates 14.4 despite the
@@ -68,22 +62,13 @@ pub fn spawn_tap_capture(
     tx: mpsc::Sender<RawFrame>,
     stop: Arc<AtomicBool>,
 ) -> Result<std::thread::JoinHandle<()>> {
-    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<TapHandles>>();
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<()>>();
     let handle = std::thread::spawn(move || {
         let setup = unsafe { setup_tap(session_start, tx, stop.clone()) };
-        let handles = match setup {
+        let (tap_id, aggregate_id, io_proc_id, ctx) = match setup {
             Ok(h) => {
-                let tap_id = h.tap_id;
-                let aggregate_id = h.aggregate_id;
-                let io_proc_id = h.io_proc_id;
-                let ctx = h.ctx;
-                let _ = ready_tx.send(Ok(TapHandles {
-                    tap_id,
-                    aggregate_id,
-                    io_proc_id,
-                    ctx,
-                }));
-                (tap_id, aggregate_id, io_proc_id, ctx)
+                let _ = ready_tx.send(Ok(()));
+                h
             }
             Err(e) => {
                 let _ = ready_tx.send(Err(e));
@@ -93,10 +78,10 @@ pub fn spawn_tap_capture(
         while !stop.load(Ordering::SeqCst) {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        unsafe { teardown(handles.0, handles.1, handles.2, handles.3) };
+        unsafe { teardown(tap_id, aggregate_id, io_proc_id, ctx) };
     });
     match ready_rx.recv() {
-        Ok(Ok(_)) => Ok(handle),
+        Ok(Ok(())) => Ok(handle),
         Ok(Err(e)) => {
             let _ = handle.join();
             Err(e)
@@ -107,13 +92,15 @@ pub fn spawn_tap_capture(
     }
 }
 
+type SetupOutput = (AudioObjectID, AudioObjectID, AudioDeviceIOProcID, *mut TapContext);
+
 unsafe fn setup_tap(
     session_start: Instant,
     tx: mpsc::Sender<RawFrame>,
     stop: Arc<AtomicBool>,
-) -> Result<TapHandles> {
+) -> Result<SetupOutput> {
     let output_device_id: AudioObjectID = get_property(
-        kAudioObjectSystemObject,
+        kAudioObjectSystemObject as u32,
         kAudioHardwarePropertyDefaultOutputDevice,
     )
     .map_err(|e| SallyError::Audio(format!("default output device: {e}")))?;
@@ -131,7 +118,7 @@ unsafe fn setup_tap(
     tap_desc.setPrivate(true);
 
     let mut tap_id: AudioObjectID = 0;
-    let status = AudioHardwareCreateProcessTap(&tap_desc, &mut tap_id);
+    let status = AudioHardwareCreateProcessTap(Some(&tap_desc), &mut tap_id);
     if status != 0 {
         return Err(SallyError::Audio(format!(
             "AudioHardwareCreateProcessTap failed: OSStatus {status} (Screen \
@@ -141,28 +128,41 @@ unsafe fn setup_tap(
     let tap_uid = tap_desc.UUID().UUIDString().to_string();
 
     let aggregate_uid = format!("com.sally.app.tap.{}", std::process::id());
-    let sub_device_dict = build_dict(&[
-        (kAudioSubDeviceUIDKey, ct(output_uid.clone())),
-    ]);
-    let sub_device_list = CFArray::from_retained_objects(&[sub_device_dict]);
+    let sub_device_dict = build_dict(&[(kAudioSubDeviceUIDKey, ct(output_uid.clone()))]);
+    let sub_device_list = erase_array(CFArray::from_retained_objects(&[sub_device_dict]));
     let tap_dict = build_dict(&[
         (kAudioSubTapUIDKey, ct(cfstr(&tap_uid))),
-        (kAudioSubTapDriftCompensationKey, kCFBooleanTrue.into()),
+        (
+            kAudioSubTapDriftCompensationKey,
+            ct(cf_bool(kCFBooleanTrue)),
+        ),
     ]);
-    let tap_list = CFArray::from_retained_objects(&[tap_dict]);
+    let tap_list = erase_array(CFArray::from_retained_objects(&[tap_dict]));
     let aggregate_dict = build_dict(&[
         (kAudioAggregateDeviceNameKey, ct(cfstr("Sally Tap"))),
         (kAudioAggregateDeviceUIDKey, ct(cfstr(&aggregate_uid))),
         (kAudioAggregateDeviceMainSubDeviceKey, ct(output_uid)),
-        (kAudioAggregateDeviceIsPrivateKey, kCFBooleanTrue.into()),
-        (kAudioAggregateDeviceIsStackedKey, kCFBooleanFalse.into()),
-        (kAudioAggregateDeviceTapAutoStartKey, kCFBooleanTrue.into()),
+        (
+            kAudioAggregateDeviceIsPrivateKey,
+            ct(cf_bool(kCFBooleanTrue)),
+        ),
+        (
+            kAudioAggregateDeviceIsStackedKey,
+            ct(cf_bool(kCFBooleanFalse)),
+        ),
+        (
+            kAudioAggregateDeviceTapAutoStartKey,
+            ct(cf_bool(kCFBooleanTrue)),
+        ),
         (kAudioAggregateDeviceSubDeviceListKey, ct(sub_device_list)),
         (kAudioAggregateDeviceTapListKey, ct(tap_list)),
     ]);
 
     let mut aggregate_id: AudioObjectID = 0;
-    let status = AudioHardwareCreateAggregateDevice(&aggregate_dict, &mut aggregate_id);
+    let status = AudioHardwareCreateAggregateDevice(
+        AsRef::<CFDictionary>::as_ref(&*aggregate_dict),
+        (&mut aggregate_id).into(),
+    );
     if status != 0 {
         AudioHardwareDestroyProcessTap(tap_id);
         return Err(SallyError::Audio(format!(
@@ -182,7 +182,7 @@ unsafe fn setup_tap(
         aggregate_id,
         Some(io_proc),
         ctx as *mut c_void,
-        &mut io_proc_id,
+        (&mut io_proc_id).into(),
     );
     if status != 0 {
         drop(Box::from_raw(ctx));
@@ -204,12 +204,7 @@ unsafe fn setup_tap(
         )));
     }
 
-    Ok(TapHandles {
-        tap_id,
-        aggregate_id,
-        io_proc_id,
-        ctx,
-    })
+    Ok((tap_id, aggregate_id, io_proc_id, ctx))
 }
 
 unsafe fn teardown(
@@ -304,8 +299,14 @@ unsafe fn get_property<T: Copy>(object_id: AudioObjectID, selector: u32) -> Resu
     let mut value = std::mem::MaybeUninit::<T>::uninit();
     let out_ptr = NonNull::new(value.as_mut_ptr() as *mut c_void)
         .ok_or_else(|| SallyError::Audio("null property buffer".into()))?;
-    let status =
-        AudioObjectGetPropertyData(object_id, &address, 0, std::ptr::null(), &mut size, out_ptr);
+    let status = AudioObjectGetPropertyData(
+        object_id,
+        (&address).into(),
+        0,
+        std::ptr::null(),
+        (&mut size).into(),
+        out_ptr,
+    );
     if status != 0 {
         return Err(SallyError::Audio(format!(
             "AudioObjectGetPropertyData(selector={selector:#x}) failed: OSStatus {status}"
@@ -336,11 +337,11 @@ unsafe fn own_process_object_id() -> Result<AudioObjectID> {
     let out_ptr = NonNull::new(&mut out as *mut AudioObjectID as *mut c_void)
         .ok_or_else(|| SallyError::Audio("null property buffer".into()))?;
     let status = AudioObjectGetPropertyData(
-        kAudioObjectSystemObject,
-        &address,
+        kAudioObjectSystemObject as u32,
+        (&address).into(),
         std::mem::size_of::<i32>() as u32,
         (&pid as *const i32).cast(),
-        &mut size,
+        (&mut size).into(),
         out_ptr,
     );
     if status != 0 || out == kAudioObjectUnknown {
@@ -355,11 +356,25 @@ fn cfstr(s: &str) -> CFRetained<CFString> {
     CFString::from_str(s)
 }
 
+/// The `kCFBooleanTrue`/`kCFBooleanFalse` statics are exposed as weak-linked
+/// (nullable) externs by the bindings; they are always present at runtime on
+/// any real macOS.
+fn cf_bool(b: Option<&'static objc2_core_foundation::CFBoolean>) -> CFRetained<objc2_core_foundation::CFBoolean> {
+    CFRetained::from(b.expect("kCFBoolean singleton always linked"))
+}
+
 fn ct<T>(v: CFRetained<T>) -> CFRetained<CFType>
 where
     T: ConcreteType + 'static,
 {
     v.into()
+}
+
+/// Discards a `CFArray<T>`'s specific element type, since only the erased
+/// `CFArray` (default `Opaque` type params) implements `ConcreteType` and can
+/// cross into `ct()`/the raw HAL calls.
+fn erase_array<T: objc2_core_foundation::Type + ?Sized>(a: CFRetained<CFArray<T>>) -> CFRetained<CFArray> {
+    CFRetained::from(AsRef::<CFArray>::as_ref(&*a))
 }
 
 /// Builds a `{CFString: CFType}` dictionary from `&CStr` key constants (the
