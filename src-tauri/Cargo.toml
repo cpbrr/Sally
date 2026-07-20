@@ -31,6 +31,11 @@ log = "0.4"
 env_logger = "0.11"
 ort = "=2.0.0-rc.12"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# Native system-audio capture (no BlackHole). Swift bridge builds with the
+# Xcode toolchain present on macOS runners; not compiled on other targets.
+screencapturekit = "8"
+
 [target.'cfg(windows)'.dependencies]
 # Per-app audio capture: WASAPI process loopback + session enumeration.
 wasapi = "0.19"

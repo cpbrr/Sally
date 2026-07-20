@@ -3,9 +3,10 @@
 //! Windows: microphone via default/selected input device, system audio via
 //! WASAPI loopback (an input stream opened on an output device).
 //!
-//! macOS: microphone works through cpal; system audio is captured from a
-//! loopback *input* device (BlackHole or similar) that the user routes
-//! meeting audio into. Without one, a clear error explains the setup.
+//! macOS: microphone works through cpal; system audio comes from
+//! ScreenCaptureKit (native, no virtual device — see `sck_capture.rs`),
+//! falling back to a loopback *input* device (BlackHole or similar) only
+//! when SCK cannot start (e.g. Screen Recording permission denied).
 
 use super::{AudioSource, RawFrame};
 use crate::error::{Result, SallyError};
