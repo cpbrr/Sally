@@ -345,6 +345,8 @@ pub struct TranscriptChunk {
     pub start_ms: u64,
     pub speaker: String,
     pub text: String,
+    /// The entry's translation line, when one exists.
+    pub translated: String,
 }
 
 /// Parse `[mm:ss] **Speaker**` headers (and their `Original:` line) out of a
@@ -373,22 +375,32 @@ pub fn parse_transcript_chunks(markdown: &str) -> Vec<TranscriptChunk> {
             continue;
         };
         let speaker = bold[..bold_end].trim().to_string();
-        // The entry text is the next `Original:` line in the block.
+        // Scan the block: the `Original:` line, then the translation line
+        // (`{Language}: …`, anything but a note in asterisks).
         let mut text = String::new();
+        let mut translated = String::new();
         while let Some(&next) = lines.peek() {
             if next.starts_with('[') {
-                break; // next entry header; entry had no Original line
+                break; // next entry header
             }
-            let consumed = lines.next().unwrap_or_default();
+            let consumed = lines.next().unwrap_or_default().trim();
             if let Some(t) = consumed.strip_prefix("Original: ") {
                 text = t.trim().to_string();
-                break;
+            } else if !consumed.is_empty()
+                && !consumed.starts_with('*')
+                && translated.is_empty()
+                && !text.is_empty()
+            {
+                if let Some((_, t)) = consumed.split_once(": ") {
+                    translated = t.trim().to_string();
+                }
             }
         }
         chunks.push(TranscriptChunk {
             start_ms,
             speaker,
             text,
+            translated,
         });
     }
     chunks
@@ -603,8 +615,10 @@ mod tests {
         assert_eq!(chunks[0].start_ms, 18_000);
         assert_eq!(chunks[0].speaker, "You");
         assert_eq!(chunks[0].text, "hello there");
+        assert_eq!(chunks[0].translated, "xin chào");
         assert_eq!(chunks[1].start_ms, 3_723_000);
         assert_eq!(chunks[1].speaker, "Meeting");
         assert_eq!(chunks[1].text, "long meeting words");
+        assert_eq!(chunks[1].translated, "", "no translation line present");
     }
 }

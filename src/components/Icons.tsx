@@ -37,6 +37,27 @@ export const IconSpeakerOff = () => (
   </Base>
 );
 
+export const IconVolume = () => (
+  <Base>
+    <path d="M11 5 6 9H2v6h4l5 4V5z" />
+    <path d="M15.5 9.5a3.5 3.5 0 0 1 0 5" />
+  </Base>
+);
+
+export const IconContrast = () => (
+  <Base>
+    <circle cx={12} cy={12} r={9} />
+    <path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none" />
+  </Base>
+);
+
+export const IconSwap = () => (
+  <Base>
+    <path d="M4 8h13l-3.5-3.5" />
+    <path d="M20 16H7l3.5 3.5" />
+  </Base>
+);
+
 export const IconPin = () => (
   <Base>
     <path d="M9 3h6l-1 7 3.5 3.5H6.5L10 10 9 3z" />

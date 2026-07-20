@@ -9,7 +9,7 @@ import { openPath } from "@tauri-apps/plugin-opener";
 import { useEffect, useRef, useState } from "react";
 import { api, formatTimestamp, MeetingFile, TranscriptChunk } from "../api";
 import { useSally } from "../store";
-import { IconFolder } from "./Icons";
+import { IconFolder, IconSwap } from "./Icons";
 
 export function SavedPopup() {
   const { dict, setPhase } = useSally();
@@ -36,11 +36,15 @@ export function ProcessingScreen() {
   const [meetings, setMeetings] = useState<MeetingFile[]>([]);
   const [meetingTitle, setMeetingTitle] = useState("");
   const [includeTimestamps, setIncludeTimestamps] = useState(true);
-  const [aiCleanup, setAiCleanup] = useState(false);
+  const [includeOriginal, setIncludeOriginal] = useState(true);
+  const [aiCleanup, setAiCleanup] = useState(true);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
   const [resultPath, setResultPath] = useState<string | null>(null);
   const [chunks, setChunks] = useState<TranscriptChunk[]>([]);
+  const [chunkLang, setChunkLang] = useState<"original" | "translated">(
+    "original"
+  );
   const audioRef = useRef<HTMLAudioElement>(null);
 
   // Load the meeting list; open the newest when nothing is selected yet.
@@ -100,7 +104,7 @@ export function ProcessingScreen() {
         result = await api.exportWithoutTimestamps();
       }
       if (aiCleanup) {
-        result = await api.cleanAndSummarize(includeTimestamps);
+        result = await api.cleanAndSummarize(includeTimestamps, includeOriginal);
       }
       setResultPath(result);
     } catch (e) {
@@ -146,7 +150,24 @@ export function ProcessingScreen() {
 
         {review?.audio_path && (
           <div className="recording">
-            <h3>{dict.recordingTitle}</h3>
+            <div className="row">
+              <h3 style={{ flex: 1 }}>{dict.recordingTitle}</h3>
+              {chunks.length > 0 && (
+                <button
+                  className={`btn compact ${
+                    chunkLang === "translated" ? "primary" : ""
+                  }`}
+                  title={dict.toggleChunkLang}
+                  onClick={() =>
+                    setChunkLang(
+                      chunkLang === "original" ? "translated" : "original"
+                    )
+                  }
+                >
+                  <IconSwap />
+                </button>
+              )}
+            </div>
             <audio
               ref={audioRef}
               controls
@@ -166,7 +187,11 @@ export function ProcessingScreen() {
                     >
                       <span className="meta">{formatTimestamp(c.start_ms)}</span>
                       <span className="speaker">{c.speaker}</span>
-                      <span className="chunk-text">{c.text}</span>
+                      <span className="chunk-text">
+                        {chunkLang === "translated"
+                          ? c.translated || c.text
+                          : c.text || c.translated}
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -196,6 +221,16 @@ export function ProcessingScreen() {
               {dict.includeTimestamps}
             </label>
             <p className="field-hint">{dict.includeTimestampsHint}</p>
+
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={includeOriginal}
+                onChange={(e) => setIncludeOriginal(e.target.checked)}
+              />
+              {dict.includeOriginal}
+            </label>
+            <p className="field-hint">{dict.includeOriginalHint}</p>
 
             <label className="check">
               <input

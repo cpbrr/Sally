@@ -18,6 +18,11 @@ const en = {
   readoutSetting: "Read translation aloud",
   readoutVolume: "Readout volume",
   textSize: "Text size",
+  toggleChunkLang: "Switch between original and translated text",
+  includeOriginal: "Include original language",
+  includeOriginalHint:
+    "Untick to have the AI-cleaned file carry only the translation, without the original-language lines.",
+  getApiKeyLink: "Get a free API key at Google AI Studio",
   readoutHint:
     "Speaks the translated voice for passages not already in the target language. Vietnamese speech is never read out when translating into Vietnamese. Use headphones to avoid the translation being captured back into the meeting.",
   settings: "Settings",
@@ -141,6 +146,11 @@ const vi: typeof en = {
   readoutSetting: "Đọc to bản dịch",
   readoutVolume: "Âm lượng đọc",
   textSize: "Cỡ chữ",
+  toggleChunkLang: "Chuyển giữa bản gốc và bản dịch",
+  includeOriginal: "Kèm ngôn ngữ gốc",
+  includeOriginalHint:
+    "Bỏ chọn để tệp AI dọn chỉ giữ bản dịch, không kèm các dòng ngôn ngữ gốc.",
+  getApiKeyLink: "Lấy khóa API miễn phí tại Google AI Studio",
   readoutHint:
     "Phát giọng dịch cho các đoạn chưa ở ngôn ngữ đích. Lời nói tiếng Việt sẽ không được đọc to khi dịch sang tiếng Việt. Nên dùng tai nghe để giọng dịch không bị thu ngược vào cuộc họp.",
   settings: "Cài đặt",

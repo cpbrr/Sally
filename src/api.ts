@@ -87,6 +87,7 @@ export interface TranscriptChunk {
   start_ms: number;
   speaker: string;
   text: string;
+  translated: string;
 }
 
 export const api = {
@@ -102,8 +103,8 @@ export const api = {
   pauseMeeting: () => invoke<void>("pause_meeting"),
   setReadout: (enabled: boolean) =>
     invoke<RedactedConfig>("set_readout", { enabled }),
-  setReadoutVolume: (volume: number) =>
-    invoke<RedactedConfig>("set_readout_volume", { volume }),
+  setReadoutVolume: (volume: number, persist: boolean) =>
+    invoke<RedactedConfig>("set_readout_volume", { volume, persist }),
   resumeMeeting: () => invoke<void>("resume_meeting"),
   endMeeting: () => invoke<ReviewInfo>("end_meeting"),
   getLastMeeting: () => invoke<ReviewInfo | null>("get_last_meeting"),
@@ -114,8 +115,8 @@ export const api = {
   applyReview: (meetingTitle?: string) =>
     invoke<ReviewInfo>("apply_review", { meetingTitle: meetingTitle ?? null }),
   exportWithoutTimestamps: () => invoke<string>("export_without_timestamps"),
-  cleanAndSummarize: (includeTimestamps: boolean) =>
-    invoke<string>("clean_and_summarize", { includeTimestamps }),
+  cleanAndSummarize: (includeTimestamps: boolean, includeOriginal: boolean) =>
+    invoke<string>("clean_and_summarize", { includeTimestamps, includeOriginal }),
   recoverMeetings: () => invoke<string[]>("recover_meetings"),
 };
 

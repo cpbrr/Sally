@@ -9,6 +9,7 @@ import {
   IconPinOff,
   IconSpeakerOff,
   IconSpeakerOn,
+  IconVolume,
 } from "./Icons";
 import { useSally } from "../store";
 
@@ -22,38 +23,24 @@ const STATUS_KEYS: Record<string, string> = {
   "storage-error": "statusStorageError",
 };
 
-const TEXT_SCALES = [1, 1.15, 1.3, 0.9];
-
 export function TitleBar() {
   const { dict, status, config, setConfig, showSettings, setShowSettings } =
     useSally();
   const [pinned, setPinned] = useState(config?.always_on_top ?? false);
   const [volume, setVolume] = useState(config?.readout_volume ?? 1);
-  const [textScale, setTextScale] = useState(() => {
-    const saved = Number(localStorage.getItem("sally.textscale"));
-    return TEXT_SCALES.includes(saved) ? saved : 1;
-  });
+  const [showVolume, setShowVolume] = useState(false);
 
   useEffect(() => {
     setVolume(config?.readout_volume ?? 1);
   }, [config?.readout_volume]);
 
-  // Transcript text size, applied via CSS variable and persisted locally.
-  useEffect(() => {
-    document.documentElement.style.setProperty(
-      "--text-scale",
-      String(textScale)
-    );
-    localStorage.setItem("sally.textscale", String(textScale));
-  }, [textScale]);
-
-  const cycleTextScale = () => {
-    const i = TEXT_SCALES.indexOf(textScale);
-    setTextScale(TEXT_SCALES[(i + 1) % TEXT_SCALES.length]);
+  // Instant while dragging (no .env write per tick), persisted on release.
+  const dragVolume = (v: number) => {
+    setVolume(v);
+    api.setReadoutVolume(v, false).catch(() => {});
   };
-
   const commitVolume = async (v: number) => {
-    const updated = await api.setReadoutVolume(v).catch(() => null);
+    const updated = await api.setReadoutVolume(v, true).catch(() => null);
     if (updated) setConfig(updated);
   };
 
@@ -100,24 +87,31 @@ export function TitleBar() {
       >
         {config?.readout_enabled ? <IconSpeakerOn /> : <IconSpeakerOff />}
       </button>
-      <input
-        className="volume-slider"
-        type="range"
-        min={0}
-        max={100}
-        value={Math.round(volume * 100)}
-        title={dict.readoutVolume}
-        onChange={(e) => setVolume(Number(e.target.value) / 100)}
-        onPointerUp={() => commitVolume(volume)}
-        onKeyUp={() => commitVolume(volume)}
-      />
-      <button
-        className="icon-btn text-size-btn"
-        title={dict.textSize}
-        onClick={cycleTextScale}
-      >
-        A
-      </button>
+      <div className="volume-wrap">
+        <button
+          className={`icon-btn ${showVolume ? "active" : ""}`}
+          title={dict.readoutVolume}
+          onClick={() => setShowVolume(!showVolume)}
+        >
+          <IconVolume />
+        </button>
+        {showVolume && (
+          <div className="volume-pop">
+            <input
+              className="volume-slider"
+              type="range"
+              min={0}
+              max={100}
+              value={Math.round(volume * 100)}
+              title={dict.readoutVolume}
+              onChange={(e) => dragVolume(Number(e.target.value) / 100)}
+              onPointerUp={() => commitVolume(volume)}
+              onKeyUp={() => commitVolume(volume)}
+            />
+            <span className="volume-value">{Math.round(volume * 100)}%</span>
+          </div>
+        )}
+      </div>
       <button
         className={`icon-btn ${pinned ? "active" : ""}`}
         title={pinned ? dict.unpin : dict.pin}
