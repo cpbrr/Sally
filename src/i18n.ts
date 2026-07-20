@@ -17,7 +17,8 @@ const en = {
   readoutOff: "Stop reading translation aloud",
   readoutSetting: "Read translation aloud",
   readoutVolume: "Readout volume",
-  textSize: "Text size",
+  textSizeSmaller: "Smaller text",
+  textSizeBigger: "Bigger text",
   toggleChunkLang: "Switch between original and translated text",
   includeOriginal: "Include original language",
   includeOriginalHint:
@@ -114,7 +115,6 @@ const en = {
   saveAudio: "Save meeting audio",
   saveAudioHint:
     "Keeps a local WAV recording next to the transcript so you can re-listen during review. Stays on this device; never uploaded.",
-  readoutSpeed: "Readout speed",
   liveModel: "Live model",
   cleanupModel: "Cleanup model",
   save: "Save",
@@ -145,7 +145,8 @@ const vi: typeof en = {
   readoutOff: "Tắt đọc to bản dịch",
   readoutSetting: "Đọc to bản dịch",
   readoutVolume: "Âm lượng đọc",
-  textSize: "Cỡ chữ",
+  textSizeSmaller: "Chữ nhỏ hơn",
+  textSizeBigger: "Chữ lớn hơn",
   toggleChunkLang: "Chuyển giữa bản gốc và bản dịch",
   includeOriginal: "Kèm ngôn ngữ gốc",
   includeOriginalHint:
@@ -236,7 +237,6 @@ const vi: typeof en = {
   saveAudio: "Lưu âm thanh cuộc họp",
   saveAudioHint:
     "Giữ bản ghi WAV cục bộ cạnh bản ghi chữ để nghe lại khi xem xét. Chỉ nằm trên máy này; không bao giờ tải lên.",
-  readoutSpeed: "Tốc độ đọc",
   liveModel: "Mô hình trực tiếp",
   cleanupModel: "Mô hình dọn bản ghi",
   save: "Lưu",
