@@ -26,6 +26,7 @@ const KEY_SPEAKER_SPLIT: &str = "SALLY_SPEAKER_SPLIT";
 const KEY_SEG_MODEL_URL: &str = "SALLY_SEGMENTATION_MODEL_URL";
 const KEY_SAVE_AUDIO: &str = "SALLY_SAVE_AUDIO";
 const KEY_READOUT_SPEED: &str = "SALLY_READOUT_SPEED";
+const KEY_READOUT_VOLUME: &str = "SALLY_READOUT_VOLUME";
 
 // The documented WebSocket endpoint for live translation is v1beta; the
 // session still auto-flips to v1alpha if setup keeps getting rejected.
@@ -65,6 +66,8 @@ pub struct AppConfig {
     /// Playback speed for the translated-voice readout (1.0 = normal).
     /// Clamped to 0.5–2.0.
     pub readout_speed: f32,
+    /// Readout playback volume, 0.0–1.0.
+    pub readout_volume: f32,
 }
 
 impl AppConfig {
@@ -88,6 +91,7 @@ impl AppConfig {
             segmentation_model_url: String::new(),
             save_audio: true,
             readout_speed: 1.0,
+            readout_volume: 1.0,
         }
     }
 
@@ -152,6 +156,9 @@ impl AppConfig {
         if let Ok(speed) = get(KEY_READOUT_SPEED).parse::<f32>() {
             cfg.readout_speed = speed.clamp(0.5, 2.0);
         }
+        if let Ok(v) = get(KEY_READOUT_VOLUME).parse::<f32>() {
+            cfg.readout_volume = v.clamp(0.0, 1.0);
+        }
         Ok(cfg)
     }
 
@@ -193,6 +200,7 @@ impl AppConfig {
             if self.save_audio { "on" } else { "off" }.into(),
         );
         map.insert(KEY_READOUT_SPEED.into(), format!("{}", self.readout_speed));
+        map.insert(KEY_READOUT_VOLUME.into(), format!("{}", self.readout_volume));
         // Legacy local-diarization keys (feature removed in v0.9.0): swept
         // from the file instead of preserved as unknowns.
         for legacy in ["SALLY_DIARIZE", "SALLY_DIAR_THRESHOLD", "SALLY_EMBEDDING_MODEL_URL"] {
@@ -228,6 +236,7 @@ impl AppConfig {
             readout_enabled: self.readout_enabled,
             save_audio: self.save_audio,
             readout_speed: self.readout_speed,
+            readout_volume: self.readout_volume,
         }
     }
 }
@@ -247,6 +256,7 @@ pub struct RedactedConfig {
     pub readout_enabled: bool,
     pub save_audio: bool,
     pub readout_speed: f32,
+    pub readout_volume: f32,
 }
 
 /// Remove every occurrence of the API key from a message before it can reach

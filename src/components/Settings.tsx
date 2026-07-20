@@ -135,6 +135,7 @@ export function Settings() {
             ))}
           </select>
         </label>
+        <p className="field-hint">{dict.micDeviceHint}</p>
 
         <label>
           {dict.systemDevice}

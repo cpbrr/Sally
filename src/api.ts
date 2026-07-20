@@ -18,6 +18,7 @@ export interface RedactedConfig {
   readout_enabled: boolean;
   save_audio: boolean;
   readout_speed: number;
+  readout_volume: number;
 }
 
 export interface BootInfo {
@@ -40,6 +41,7 @@ export interface SettingsPayload {
   readout_enabled?: boolean;
   save_audio?: boolean;
   readout_speed?: number;
+  readout_volume?: number;
 }
 
 export interface AudioDevices {
@@ -100,6 +102,8 @@ export const api = {
   pauseMeeting: () => invoke<void>("pause_meeting"),
   setReadout: (enabled: boolean) =>
     invoke<RedactedConfig>("set_readout", { enabled }),
+  setReadoutVolume: (volume: number) =>
+    invoke<RedactedConfig>("set_readout_volume", { volume }),
   resumeMeeting: () => invoke<void>("resume_meeting"),
   endMeeting: () => invoke<ReviewInfo>("end_meeting"),
   getLastMeeting: () => invoke<ReviewInfo | null>("get_last_meeting"),

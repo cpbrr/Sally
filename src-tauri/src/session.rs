@@ -49,6 +49,8 @@ pub enum Control {
     Stop,
     /// Toggle translated-voice readout mid-meeting.
     SetReadout(bool),
+    /// Change readout volume (0.0–1.0) mid-meeting.
+    SetReadoutVolume(f32),
 }
 
 /// Returned to the command layer when the meeting ends.
@@ -197,6 +199,7 @@ async fn run_session(
     // language differs from the target (never Vietnamese-to-Vietnamese).
     let target_code = crate::lang::bcp47(&config.target_language).to_string();
     let mut readout_enabled = config.readout_enabled;
+    let mut readout_volume = config.readout_volume;
     let mut gate = ReadoutGate::new(&target_code);
     let mut player: Option<Player> = None;
     // Last moment readout audio was audible; original-transcription
@@ -302,6 +305,12 @@ async fn run_session(
                             if let Some(p) = player.as_ref() {
                                 p.clear();
                             }
+                        }
+                    }
+                    Some(Control::SetReadoutVolume(v)) => {
+                        readout_volume = v.clamp(0.0, 1.0);
+                        if let Some(p) = player.as_ref() {
+                            p.set_volume(readout_volume);
                         }
                     }
                     Some(Control::Stop) | None => break,
@@ -425,7 +434,7 @@ async fn run_session(
                             .map(|p| p.original)
                             .unwrap_or_default();
                         let tail = gate.end_turn(&original);
-                        play(&mut player, &mut readout_enabled, &tail, config.readout_speed);
+                        play(&mut player, &mut readout_enabled, &tail, config.readout_speed, readout_volume);
                     }
                     finalize_entry(&app, &mut assembler, &mut store,
                                    &config, &mut sealed_entries);
@@ -547,7 +556,7 @@ async fn run_session(
                                 .map(|p| p.original)
                                 .unwrap_or_default();
                             let playable = gate.push_audio(samples, &original);
-                            play(&mut player, &mut readout_enabled, &playable, config.readout_speed);
+                            play(&mut player, &mut readout_enabled, &playable, config.readout_speed, readout_volume);
                         }
                     }
                     Some(LiveEvent::TurnComplete) => {
@@ -557,7 +566,7 @@ async fn run_session(
                                 .map(|p| p.original)
                                 .unwrap_or_default();
                             let tail = gate.end_turn(&original);
-                            play(&mut player, &mut readout_enabled, &tail, config.readout_speed);
+                            play(&mut player, &mut readout_enabled, &tail, config.readout_speed, readout_volume);
                         }
                         // Rotate instead of sealing immediately: the entry
                         // stays open one more turn so trailing translation
@@ -664,12 +673,18 @@ async fn run_session(
 
 /// Send gated samples to the output device, opening it lazily. If no output
 /// device exists, readout turns itself off instead of failing the session.
-fn play(player: &mut Option<Player>, readout_enabled: &mut bool, samples: &[i16], speed: f32) {
+fn play(
+    player: &mut Option<Player>,
+    readout_enabled: &mut bool,
+    samples: &[i16],
+    speed: f32,
+    volume: f32,
+) {
     if samples.is_empty() {
         return;
     }
     if player.is_none() {
-        match Player::new(speed) {
+        match Player::new(speed, volume) {
             Ok(p) => *player = Some(p),
             Err(e) => {
                 log::error!("readout unavailable: {e}");

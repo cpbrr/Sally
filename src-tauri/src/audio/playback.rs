@@ -12,7 +12,7 @@ use super::LinearResampler;
 use crate::error::{Result, SallyError};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -31,6 +31,9 @@ pub struct Player {
     resampler: LinearResampler,
     device_rate: u32,
     stop: Arc<AtomicBool>,
+    /// Playback gain (f32 bits), applied in the output callback so it can
+    /// change mid-stream without touching queued samples.
+    volume: Arc<AtomicU32>,
     thread: Option<std::thread::JoinHandle<()>>,
     last_active: Instant,
 }
@@ -40,9 +43,10 @@ impl Player {
     /// `speed` (0.5–2.0, 1.0 = normal) plays the readout faster or slower
     /// by treating the source as a higher/lower virtual sample rate — a
     /// slight pitch shift comes with it, which is fine for speech.
-    pub fn new(speed: f32) -> Result<Self> {
+    pub fn new(speed: f32, volume: f32) -> Result<Self> {
         let queue: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::new()));
         let stop = Arc::new(AtomicBool::new(false));
+        let volume = Arc::new(AtomicU32::new(volume.clamp(0.0, 1.0).to_bits()));
 
         // Probe the device rate on the caller thread so `new` can fail early
         // and the resampler can be configured before the thread starts.
@@ -58,8 +62,9 @@ impl Player {
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<()>>();
         let q = queue.clone();
         let stop_flag = stop.clone();
+        let vol = volume.clone();
         let thread = std::thread::spawn(move || {
-            let stream = match build_output_stream(&device, &config, q) {
+            let stream = match build_output_stream(&device, &config, q, vol) {
                 Ok(s) => {
                     let _ = ready_tx.send(Ok(()));
                     s
@@ -95,9 +100,16 @@ impl Player {
             resampler: LinearResampler::new(virtual_rate, device_rate),
             device_rate,
             stop,
+            volume,
             thread: Some(thread),
             last_active: Instant::now() - ACTIVE_TAIL,
         })
+    }
+
+    /// Change readout volume (0.0–1.0) mid-stream.
+    pub fn set_volume(&self, v: f32) {
+        self.volume
+            .store(v.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
     }
 
     /// Queue translated 24 kHz mono samples for playback.
@@ -146,41 +158,50 @@ fn build_output_stream(
     device: &cpal::Device,
     config: &cpal::SupportedStreamConfig,
     queue: Arc<Mutex<VecDeque<f32>>>,
+    volume: Arc<AtomicU32>,
 ) -> Result<cpal::Stream> {
     let channels = config.channels() as usize;
     let stream_config: cpal::StreamConfig = config.config();
     let err_fn = |e| log::error!("readout stream error: {e}");
 
     let stream = match config.sample_format() {
-        cpal::SampleFormat::F32 => device.build_output_stream(
-            &stream_config,
-            move |data: &mut [f32], _| {
-                let mut q = queue.lock().unwrap();
-                for frame in data.chunks_mut(channels) {
-                    let s = q.pop_front().unwrap_or(0.0);
-                    for out in frame.iter_mut() {
-                        *out = s;
+        cpal::SampleFormat::F32 => {
+            let vol = volume.clone();
+            device.build_output_stream(
+                &stream_config,
+                move |data: &mut [f32], _| {
+                    let g = f32::from_bits(vol.load(Ordering::Relaxed));
+                    let mut q = queue.lock().unwrap();
+                    for frame in data.chunks_mut(channels) {
+                        let s = q.pop_front().unwrap_or(0.0) * g;
+                        for out in frame.iter_mut() {
+                            *out = s;
+                        }
                     }
-                }
-            },
-            err_fn,
-            None,
-        ),
-        cpal::SampleFormat::I16 => device.build_output_stream(
-            &stream_config,
-            move |data: &mut [i16], _| {
-                let mut q = queue.lock().unwrap();
-                for frame in data.chunks_mut(channels) {
-                    let s = q.pop_front().unwrap_or(0.0);
-                    let v = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
-                    for out in frame.iter_mut() {
-                        *out = v;
+                },
+                err_fn,
+                None,
+            )
+        }
+        cpal::SampleFormat::I16 => {
+            let vol = volume.clone();
+            device.build_output_stream(
+                &stream_config,
+                move |data: &mut [i16], _| {
+                    let g = f32::from_bits(vol.load(Ordering::Relaxed));
+                    let mut q = queue.lock().unwrap();
+                    for frame in data.chunks_mut(channels) {
+                        let s = q.pop_front().unwrap_or(0.0) * g;
+                        let v = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
+                        for out in frame.iter_mut() {
+                            *out = v;
+                        }
                     }
-                }
-            },
-            err_fn,
-            None,
-        ),
+                },
+                err_fn,
+                None,
+            )
+        }
         other => {
             return Err(SallyError::Audio(format!(
                 "unsupported output sample format: {other:?}"

@@ -293,6 +293,30 @@ pub async fn resume_meeting(state: State<'_, AppState>) -> Result<()> {
     send_control(&state, Control::Resume).await
 }
 
+/// Set translated-voice readout volume (0.0–1.0). Persists to `.env` and
+/// applies live to a running meeting.
+#[tauri::command]
+pub async fn set_readout_volume(state: State<'_, AppState>, volume: f32) -> Result<RedactedConfig> {
+    let clamped = volume.clamp(0.0, 1.0);
+    let redacted = {
+        let mut guard = state.config.lock().await;
+        let cfg = guard
+            .as_mut()
+            .ok_or_else(|| SallyError::Config("setup not completed".into()))?;
+        cfg.readout_volume = clamped;
+        cfg.save()?;
+        cfg.redacted()
+    };
+    let guard = state.session.lock().await;
+    if let Some(session) = guard.as_ref() {
+        let _ = session
+            .control_tx
+            .send(Control::SetReadoutVolume(clamped))
+            .await;
+    }
+    Ok(redacted)
+}
+
 #[derive(Serialize)]
 pub struct ReviewInfo {
     pub raw_path: String,
@@ -487,7 +511,11 @@ pub async fn clean_and_summarize(
         );
     }
     let cleaned = cleaned_parts.join("\n\n");
-    let summary = client.summarize(&cleaned).await?;
+    // The meeting name gives the summary its context (the user typed it in
+    // review; the raw file's heading carries it after rename).
+    let summary = client
+        .summarize(&format!("Meeting title: {title}\n\n{cleaned}"))
+        .await?;
     let polished = render_polished(&title, &summary, &cleaned);
 
     // Publish atomically only after all stages succeeded (design §9).

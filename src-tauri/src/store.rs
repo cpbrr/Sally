@@ -236,6 +236,18 @@ impl MeetingStore {
             std::fs::rename(old_journal, self.journal_path())?;
         }
         self.meta.title = new_title.to_string();
+        // The `# Title` heading inside the raw file is what the cleanup
+        // step (and the polished file) read the meeting name from — the
+        // rename must reach it, not just the filenames.
+        if let Ok(text) = std::fs::read_to_string(&self.raw_path) {
+            if text.starts_with("# ") {
+                let rest = text.split_once('\n').map(|(_, r)| r).unwrap_or("");
+                let updated = format!("# {new_title}\n{rest}");
+                let tmp = self.raw_path.with_extension("md.tmp");
+                std::fs::write(&tmp, updated)?;
+                std::fs::rename(&tmp, &self.raw_path)?;
+            }
+        }
         Ok(())
     }
 
@@ -570,6 +582,14 @@ mod tests {
         let name = store.raw_path().file_name().unwrap().to_string_lossy().to_string();
         assert!(name.contains("Weekly-Sync"), "{name}");
         assert!(!name.contains(':'));
+        // The in-file heading follows too: cleanup reads the title from it.
+        let text = std::fs::read_to_string(store.raw_path()).unwrap();
+        assert!(
+            text.starts_with("# Weekly Sync: Q3 planning!
+"),
+            "heading updated: {}",
+            text.lines().next().unwrap_or("")
+        );
     }
 
     #[test]
