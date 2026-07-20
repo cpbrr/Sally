@@ -435,7 +435,11 @@ async fn run_session(
                             .map(|p| p.original)
                             .unwrap_or_default();
                         let tail = gate.end_turn(&original);
-                        play(&mut player, &mut readout_enabled, &tail, readout_volume);
+                        // Never read the user's own mic speech back to them
+                        // translated — only remote (Meeting) turns qualify.
+                        if !assembler.open_mic_dominated() {
+                            play(&mut player, &mut readout_enabled, &tail, readout_volume);
+                        }
                     }
                     finalize_entry(&app, &mut assembler, &mut store,
                                    &config, &mut sealed_entries);
@@ -557,7 +561,12 @@ async fn run_session(
                                 .map(|p| p.original)
                                 .unwrap_or_default();
                             let playable = gate.push_audio(samples, &original);
-                            play(&mut player, &mut readout_enabled, &playable, readout_volume);
+                            // Never read the user's own mic speech back to
+                            // them translated — only remote (Meeting) turns
+                            // qualify.
+                            if !assembler.open_mic_dominated() {
+                                play(&mut player, &mut readout_enabled, &playable, readout_volume);
+                            }
                         }
                     }
                     Some(LiveEvent::TurnComplete) => {
@@ -567,7 +576,12 @@ async fn run_session(
                                 .map(|p| p.original)
                                 .unwrap_or_default();
                             let tail = gate.end_turn(&original);
-                            play(&mut player, &mut readout_enabled, &tail, readout_volume);
+                            // Never read the user's own mic speech back to
+                            // them translated — only remote (Meeting) turns
+                            // qualify.
+                            if !assembler.open_mic_dominated() {
+                                play(&mut player, &mut readout_enabled, &tail, readout_volume);
+                            }
                         }
                         // Rotate instead of sealing immediately: the entry
                         // stays open one more turn so trailing translation

@@ -131,6 +131,14 @@ export const IconEyeOff = () => (
   </Base>
 );
 
+export const IconWarning = () => (
+  <Base>
+    <path d="M12 3 22 20H2z" />
+    <line x1={12} y1={9.5} x2={12} y2={14.5} />
+    <circle cx={12} cy={17.3} r={0.6} fill="currentColor" stroke="none" />
+  </Base>
+);
+
 export const IconRefresh = () => (
   <Base>
     <path d="M21 4v6h-6" />
