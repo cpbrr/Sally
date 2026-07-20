@@ -5,7 +5,7 @@
 import { useEffect, useState } from "react";
 import { IconContrast } from "./Icons";
 import { useSally } from "../store";
-import { isTranslucent, setTranslucent } from "../transparency";
+import { isTranslucent, onTranslucentChange, setTranslucent } from "../transparency";
 
 const TEXT_SCALE_MIN = 0.85;
 const TEXT_SCALE_MAX = 2.0;
@@ -18,6 +18,8 @@ export function CornerTools() {
     return saved >= TEXT_SCALE_MIN && saved <= TEXT_SCALE_MAX ? saved : 1;
   });
   const [translucent, setTranslucentState] = useState(isTranslucent());
+
+  useEffect(() => onTranslucentChange(setTranslucentState), []);
 
   useEffect(() => {
     document.documentElement.style.setProperty(
