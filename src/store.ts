@@ -33,6 +33,8 @@ interface SallyState {
   pausedAccumMs: number;
   pausedSince: number | null;
   showSettings: boolean;
+  // Background speaker identification after a meeting ends.
+  diarizeState: "idle" | "running" | "done" | "failed";
 
   setPhase: (p: Phase) => void;
   setConfig: (c: RedactedConfig | null) => void;
@@ -48,6 +50,7 @@ interface SallyState {
   setPaused: (paused: boolean) => void;
   resetMeeting: () => void;
   setShowSettings: (v: boolean) => void;
+  setDiarizeState: (s: "idle" | "running" | "done" | "failed") => void;
 }
 
 export const useSally = create<SallyState>((set, get) => ({
@@ -68,6 +71,7 @@ export const useSally = create<SallyState>((set, get) => ({
   pausedAccumMs: 0,
   pausedSince: null,
   showSettings: false,
+  diarizeState: "idle",
 
   setPhase: (phase) => set({ phase }),
   setConfig: (config) => {
@@ -113,6 +117,8 @@ export const useSally = create<SallyState>((set, get) => ({
       status: "idle",
       statusDetail: "",
       warning: "",
+      diarizeState: "idle",
     }),
   setShowSettings: (showSettings) => set({ showSettings }),
+  setDiarizeState: (diarizeState) => set({ diarizeState }),
 }));

@@ -222,6 +222,50 @@ impl MeetingStore {
         Ok(())
     }
 
+    /// Apply per-entry speaker labels from the offline diarization pass:
+    /// each `[ts] **Meeting**` header whose timestamp appears in
+    /// `assignments` gets that entry's new label. Atomic rewrite; returns
+    /// how many entries changed.
+    pub fn relabel_entries(&self, assignments: &BTreeMap<u64, String>) -> Result<usize> {
+        if assignments.is_empty() {
+            return Ok(0);
+        }
+        let text = std::fs::read_to_string(&self.raw_path)?;
+        let mut changed = 0usize;
+        let updated: Vec<String> = text
+            .lines()
+            .map(|line| {
+                let Some(rest) = line.strip_prefix('[') else {
+                    return line.to_string();
+                };
+                let Some(close) = rest.find(']') else {
+                    return line.to_string();
+                };
+                let ts = &rest[..close];
+                let after = rest[close + 1..].trim_start();
+                if !after.starts_with("**Meeting**") {
+                    return line.to_string();
+                }
+                let Some(ms) = parse_timestamp_ms(ts) else {
+                    return line.to_string();
+                };
+                let Some(label) = assignments.get(&ms) else {
+                    return line.to_string();
+                };
+                changed += 1;
+                line.replacen("**Meeting**", &format!("**{label}**"), 1)
+            })
+            .collect();
+        let mut out = updated.join("\n");
+        if text.ends_with('\n') {
+            out.push('\n');
+        }
+        let tmp = self.raw_path.with_extension("md.tmp");
+        std::fs::write(&tmp, out)?;
+        std::fs::rename(&tmp, &self.raw_path)?;
+        Ok(changed)
+    }
+
     /// Timestamp-free export: separate copy, source untouched (design §2, §8.1).
     pub fn export_without_timestamps(&self) -> Result<PathBuf> {
         let text = std::fs::read_to_string(&self.raw_path)?;
@@ -632,6 +676,33 @@ mod tests {
         let name = store.raw_path().file_name().unwrap().to_string_lossy().to_string();
         assert!(name.contains("Weekly-Sync"), "{name}");
         assert!(!name.contains(':'));
+    }
+
+    #[test]
+    fn relabel_rewrites_only_matching_meeting_headers() {
+        let (m, r) = tmp_dirs("relabel");
+        let mut store =
+            MeetingStore::create(m, r, chrono::Local::now(), "Vietnamese").unwrap();
+        store
+            .append_entry(&speech(0, 18_000, "Meeting", "first voice", "x"), "Vietnamese")
+            .unwrap();
+        store
+            .append_entry(&speech(1, 30_000, "You", "me", "y"), "Vietnamese")
+            .unwrap();
+        store
+            .append_entry(&speech(2, 45_000, "Meeting", "second voice", "z"), "Vietnamese")
+            .unwrap();
+        let mut a = BTreeMap::new();
+        a.insert(18_000u64, "Speaker 1".to_string());
+        a.insert(45_000u64, "Speaker 2".to_string());
+        let changed = store.relabel_entries(&a).unwrap();
+        assert_eq!(changed, 2);
+        let text = std::fs::read_to_string(store.raw_path()).unwrap();
+        assert!(text.contains("[00:18] **Speaker 1**"));
+        assert!(text.contains("[00:45] **Speaker 2**"));
+        assert!(text.contains("[00:30] **You**"), "You entries untouched");
+        assert!(!text.contains("**Meeting**"));
+        assert!(text.ends_with("\n\n"), "trailing block separator preserved");
     }
 
     #[test]

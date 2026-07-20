@@ -1,7 +1,9 @@
 pub mod audio;
 pub mod commands;
 pub mod config;
+pub mod diarize;
 pub mod error;
+pub mod fbank;
 pub mod gemini;
 pub mod lang;
 pub mod readout;

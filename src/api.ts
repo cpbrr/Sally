@@ -139,6 +139,15 @@ export function onWarning(cb: (message: string) => void): Promise<UnlistenFn> {
   return listen<string>("sally://warning", (ev) => cb(ev.payload));
 }
 
+export interface DiarizePayload {
+  state: "running" | "done" | "failed";
+  detail: string;
+}
+
+export function onDiarize(cb: (p: DiarizePayload) => void): Promise<UnlistenFn> {
+  return listen<DiarizePayload>("sally://diarize", (ev) => cb(ev.payload));
+}
+
 export function formatTimestamp(ms: number): string {
   const totalS = Math.floor(ms / 1000);
   const h = Math.floor(totalS / 3600);

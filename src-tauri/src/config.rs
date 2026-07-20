@@ -26,6 +26,9 @@ const KEY_SPEAKER_SPLIT: &str = "SALLY_SPEAKER_SPLIT";
 const KEY_SEG_MODEL_URL: &str = "SALLY_SEGMENTATION_MODEL_URL";
 const KEY_SAVE_AUDIO: &str = "SALLY_SAVE_AUDIO";
 const KEY_READOUT_SPEED: &str = "SALLY_READOUT_SPEED";
+const KEY_DIARIZE: &str = "SALLY_DIARIZE";
+const KEY_DIAR_THRESHOLD: &str = "SALLY_DIAR_THRESHOLD";
+const KEY_EMBEDDING_MODEL_URL: &str = "SALLY_EMBEDDING_MODEL_URL";
 
 // The documented WebSocket endpoint for live translation is v1beta; the
 // session still auto-flips to v1alpha if setup keeps getting rejected.
@@ -65,6 +68,15 @@ pub struct AppConfig {
     /// Playback speed for the translated-voice readout (1.0 = normal).
     /// Clamped to 0.5–2.0.
     pub readout_speed: f32,
+    /// Offline speaker identification over the saved recording after each
+    /// meeting (requires save_audio). On by default; SALLY_DIARIZE=off
+    /// disables it.
+    pub diarize_enabled: bool,
+    /// Join similarity for diarization clustering (0.05–0.95). Higher =
+    /// more distinct speakers.
+    pub diar_threshold: f32,
+    /// Override URL for the speaker embedding model (air-gapped setups).
+    pub embedding_model_url: String,
 }
 
 impl AppConfig {
@@ -88,6 +100,9 @@ impl AppConfig {
             segmentation_model_url: String::new(),
             save_audio: true,
             readout_speed: 1.0,
+            diarize_enabled: true,
+            diar_threshold: 0.5,
+            embedding_model_url: String::new(),
         }
     }
 
@@ -152,6 +167,11 @@ impl AppConfig {
         if let Ok(speed) = get(KEY_READOUT_SPEED).parse::<f32>() {
             cfg.readout_speed = speed.clamp(0.5, 2.0);
         }
+        cfg.diarize_enabled = get(KEY_DIARIZE) != "off";
+        if let Ok(t) = get(KEY_DIAR_THRESHOLD).parse::<f32>() {
+            cfg.diar_threshold = t.clamp(0.05, 0.95);
+        }
+        cfg.embedding_model_url = get(KEY_EMBEDDING_MODEL_URL);
         Ok(cfg)
     }
 
@@ -193,6 +213,15 @@ impl AppConfig {
             if self.save_audio { "on" } else { "off" }.into(),
         );
         map.insert(KEY_READOUT_SPEED.into(), format!("{}", self.readout_speed));
+        map.insert(
+            KEY_DIARIZE.into(),
+            if self.diarize_enabled { "on" } else { "off" }.into(),
+        );
+        map.insert(KEY_DIAR_THRESHOLD.into(), format!("{}", self.diar_threshold));
+        map.insert(
+            KEY_EMBEDDING_MODEL_URL.into(),
+            self.embedding_model_url.clone(),
+        );
         let mut out = String::from(
             "# Sally configuration. The API key is stored in plain text by design;\n\
              # anyone who can read this folder can obtain it.\n",
@@ -330,5 +359,7 @@ mod tests {
         assert_eq!(cfg.live_api_version, DEFAULT_LIVE_API_VERSION);
         assert!(cfg.save_audio, "audio saving must default on");
         assert_eq!(cfg.readout_speed, 1.0);
+        assert!(cfg.diarize_enabled, "diarization must default on");
+        assert_eq!(cfg.diar_threshold, 0.5);
     }
 }

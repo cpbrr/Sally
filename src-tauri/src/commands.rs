@@ -9,7 +9,7 @@ use crate::store::MeetingStore;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex;
 
 #[derive(Default)]
@@ -329,9 +329,11 @@ pub async fn meeting_chunks(state: State<'_, AppState>) -> Result<Vec<crate::sto
 }
 
 /// End the meeting and enter review (design §6.4). The raw transcript is
-/// already preserved before this returns.
+/// already preserved before this returns; speaker identification (if a
+/// recording exists) runs in the background afterwards and never delays
+/// this command.
 #[tauri::command]
-pub async fn end_meeting(state: State<'_, AppState>) -> Result<ReviewInfo> {
+pub async fn end_meeting(app: AppHandle, state: State<'_, AppState>) -> Result<ReviewInfo> {
     let mut handle = {
         let mut guard = state.session.lock().await;
         guard
@@ -347,8 +349,113 @@ pub async fn end_meeting(state: State<'_, AppState>) -> Result<ReviewInfo> {
         .await
         .map_err(|_| SallyError::Session("session task dropped".into()))??;
     let info = review_info(&review);
+    let raw_path = review.store.raw_path().to_path_buf();
+    let audio_path = review.store.audio_path();
     *state.last_meeting.lock().await = Some(review);
+    let cfg = state.config.lock().await.clone();
+    if let Some(cfg) = cfg {
+        if cfg.diarize_enabled && audio_path.exists() {
+            spawn_diarization(app, cfg, raw_path, audio_path);
+        }
+    }
     Ok(info)
+}
+
+fn diarize_emit(app: &AppHandle, state: &str, detail: &str) {
+    let _ = app.emit(
+        "sally://diarize",
+        serde_json::json!({ "state": state, "detail": detail }),
+    );
+}
+
+/// Offline speaker identification over the saved recording, entirely in the
+/// background: embeds each "Meeting" entry's audio span, clusters, and
+/// rewrites the labels to "Speaker N". The review screen refreshes on the
+/// `sally://diarize` done event; rename/merge in review corrects mistakes.
+fn spawn_diarization(app: AppHandle, cfg: AppConfig, raw_path: PathBuf, audio_path: PathBuf) {
+    tauri::async_runtime::spawn(async move {
+        diarize_emit(&app, "running", "");
+        let model = match crate::diarize::ensure_model(&cfg.data_dir, &cfg.embedding_model_url)
+            .await
+        {
+            Ok(m) => m,
+            Err(e) => {
+                log::warn!("diarization skipped: {e}");
+                diarize_emit(&app, "failed", &e.to_string());
+                return;
+            }
+        };
+        let threshold = cfg.diar_threshold;
+        let raw_for_task = raw_path.clone();
+        let audio_for_task = audio_path.clone();
+        let result = tokio::task::spawn_blocking(move || -> Result<Vec<crate::diarize::Assignment>> {
+            let samples = crate::diarize::read_wav_16k_mono(&audio_for_task)?;
+            let text = std::fs::read_to_string(&raw_for_task)?;
+            let chunks = crate::store::parse_transcript_chunks(&text);
+            let mut extractor = crate::diarize::EmbeddingExtractor::new(&model)?;
+            Ok(crate::diarize::assign_speakers(
+                &mut extractor,
+                &samples,
+                &chunks,
+                threshold,
+            ))
+        })
+        .await;
+        let assignments = match result {
+            Ok(Ok(a)) => a,
+            Ok(Err(e)) => {
+                log::warn!("diarization failed: {e}");
+                diarize_emit(&app, "failed", &e.to_string());
+                return;
+            }
+            Err(e) => {
+                log::warn!("diarization task panicked: {e}");
+                diarize_emit(&app, "failed", "internal error");
+                return;
+            }
+        };
+        if assignments.is_empty() {
+            diarize_emit(&app, "done", "0");
+            return;
+        }
+        let map: BTreeMap<u64, String> = assignments
+            .into_iter()
+            .map(|a| (a.start_ms, a.label))
+            .collect();
+        let speakers_found = map
+            .values()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
+        // Apply through last_meeting when it is still this meeting (its
+        // store tracks renames done meanwhile); fall back to the original
+        // path otherwise.
+        let state = app.state::<AppState>();
+        let mut guard = state.last_meeting.lock().await;
+        let applied = match guard.as_mut() {
+            Some(review) if review.store.raw_path().file_stem() == raw_path.file_stem()
+                || review.store.raw_path() == raw_path =>
+            {
+                review.store.relabel_entries(&map).and_then(|n| {
+                    let text = std::fs::read_to_string(review.store.raw_path())?;
+                    review.speakers = MeetingStore::extract_speakers(&text);
+                    Ok(n)
+                })
+            }
+            _ => MeetingStore::attach(cfg.meetings_dir(), cfg.recovery_dir(), raw_path.clone())
+                .and_then(|store| store.relabel_entries(&map)),
+        };
+        drop(guard);
+        match applied {
+            Ok(n) => {
+                log::info!("diarization labeled {n} entries as {speakers_found} speaker(s)");
+                diarize_emit(&app, "done", &speakers_found.to_string());
+            }
+            Err(e) => {
+                log::warn!("diarization relabel failed: {e}");
+                diarize_emit(&app, "failed", &e.to_string());
+            }
+        }
+    });
 }
 
 /// Re-open the last finished meeting in the processing screen.
