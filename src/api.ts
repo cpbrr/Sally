@@ -78,7 +78,6 @@ export interface ReviewInfo {
   raw_path: string;
   raw_dir: string;
   polished_dir: string;
-  speakers: string[];
   audio_path: string | null;
 }
 
@@ -108,11 +107,8 @@ export const api = {
   openMeeting: (rawPath: string) =>
     invoke<ReviewInfo>("open_meeting", { rawPath }),
   meetingChunks: () => invoke<TranscriptChunk[]>("meeting_chunks"),
-  applyReview: (renames: Record<string, string>, meetingTitle?: string) =>
-    invoke<ReviewInfo>("apply_review", {
-      renames,
-      meetingTitle: meetingTitle ?? null,
-    }),
+  applyReview: (meetingTitle?: string) =>
+    invoke<ReviewInfo>("apply_review", { meetingTitle: meetingTitle ?? null }),
   exportWithoutTimestamps: () => invoke<string>("export_without_timestamps"),
   cleanAndSummarize: (includeTimestamps: boolean) =>
     invoke<string>("clean_and_summarize", { includeTimestamps }),
@@ -137,15 +133,6 @@ export function onStatus(cb: (s: StatusPayload) => void): Promise<UnlistenFn> {
 
 export function onWarning(cb: (message: string) => void): Promise<UnlistenFn> {
   return listen<string>("sally://warning", (ev) => cb(ev.payload));
-}
-
-export interface DiarizePayload {
-  state: "running" | "done" | "failed";
-  detail: string;
-}
-
-export function onDiarize(cb: (p: DiarizePayload) => void): Promise<UnlistenFn> {
-  return listen<DiarizePayload>("sally://diarize", (ev) => cb(ev.payload));
 }
 
 export function formatTimestamp(ms: number): string {

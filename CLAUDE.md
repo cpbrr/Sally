@@ -65,16 +65,16 @@ Claude-Session trailer as commits.
 
 ## Project conventions & gotchas
 
-- Live speaker labels are activity attribution only ("You" = mic-dominated,
-  else "Meeting"). LIVE diarization stays banned — removed in v0.6.0 after
-  six failed tuning releases (history in git v0.4.0–v0.5.1). Since v0.8.0 an
-  OFFLINE pass (`diarize.rs` + `fbank.rs`, WeSpeaker CAM++ ONNX over the
-  saved WAV) relabels "Meeting" → "Speaker N" in a detached background task
-  after end_meeting; tune via SALLY_DIAR_THRESHOLD in `.env`.
-- Meeting transcripts append to the raw file as entries seal. `end_meeting`
-  must stay instant (the end-meeting hang was a regression we fixed) —
-  post-meeting work like diarization runs only as a detached background
-  task that never blocks the command.
+- Speaker labels are "You" (mic-dominated) or "Meeting" (everything else),
+  full stop. LOCAL diarization is banned in any form: live variants failed
+  six tuning releases (removed v0.6.0, history in git v0.4.0–v0.5.1), and
+  the offline WAV pass shipped in v0.8.0 made no practical difference and
+  was removed in v0.9.0. Speaker attribution is the Gemini cleanup step's
+  job (`cleanup_prompt` instructs it to infer and label speakers in the
+  polished file; the raw file keeps You/Meeting).
+- Meeting transcripts append to the raw file as entries seal; nothing runs
+  at meeting end (keep it that way — the end-meeting hang was a regression
+  we fixed).
 - The two-stage assembler (`rotate_turn`) routes lagging translation into
   the closing entry so original/translated stay paired. Any change that
   splits or seals entries must preserve this.

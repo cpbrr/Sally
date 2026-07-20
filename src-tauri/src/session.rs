@@ -15,7 +15,6 @@ use crate::store::{MeetingStore, RecoveryJournal};
 use crate::timeline::Assembler;
 use serde::Serialize;
 use serde_json::json;
-use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -39,6 +38,10 @@ const MIN_SPLIT_CHARS: usize = 12;
 /// boundary is split anyway, so one uninterrupted speaker never accumulates
 /// an unreadably long block ("split every minute").
 const MAX_TURN_DURATION_MS: u64 = 60_000;
+/// A pending speaker-change split waits for a sentence boundary, but never
+/// accumulates more than this much additional text before splitting anyway
+/// (a speaker who never punctuates must not merge two voices forever).
+const PENDING_SPLIT_MAX_EXTRA_CHARS: usize = 160;
 
 pub enum Control {
     Pause,
@@ -51,7 +54,6 @@ pub enum Control {
 /// Returned to the command layer when the meeting ends.
 pub struct ReviewData {
     pub store: MeetingStore,
-    pub speakers: Vec<String>,
 }
 
 pub struct SessionHandle {
@@ -185,7 +187,6 @@ async fn run_session(
     // Full meeting timeline kept in memory for the end-of-meeting speaker
     // list and review data.
     let mut sealed_entries: Vec<crate::timeline::TimelineEntry> = Vec::new();
-    let mut speakers: BTreeSet<String> = BTreeSet::new();
     let mut paused = false;
     let mut last_chunk_ms: u64 = 0;
     let mut last_fragment_ms: u64 = 0;
@@ -226,6 +227,12 @@ async fn run_session(
     // when the spoken language changes mid-stream. Only script-detectable
     // languages participate (Latin-only text stays None and never splits).
     let mut open_lang: Option<&'static str> = None;
+
+    // A speaker-change boundary arrived but the rotation is deferred until
+    // the open entry's text reaches a sentence end, so the previous
+    // speaker's lagging transcription drains into their own entry.
+    let mut rotate_pending = false;
+    let mut pending_since_len = 0usize;
 
     // Speaker-change splitting: the detector arrives asynchronously once
     // the model is ensured (first run downloads ~6 MB). The meeting never
@@ -310,9 +317,13 @@ async fn run_session(
                 }
             }
 
-            // A remote voice handed off to a different one: rotate the turn
-            // so the next words start a new "Meeting" line. Translation for
-            // the frozen entry keeps streaming into it (rotate_turn).
+            // A remote voice handed off to a different one. The rotation is
+            // NOT applied immediately: transcription lags the audio by a
+            // couple of seconds, so the previous speaker's last words are
+            // still in flight and would land in the new speaker's entry.
+            // Instead the split goes pending and fires once the open entry's
+            // text reaches a sentence boundary (or a size cap), letting the
+            // tail drain into its own entry first.
             boundary = async { split_det.as_mut().unwrap().boundary_rx.recv().await },
                 if split_det.is_some() => {
                 match boundary {
@@ -321,12 +332,8 @@ async fn run_session(
                             && !assembler.open_mic_dominated()
                             && assembler.open_original_len() >= MIN_SPLIT_CHARS
                         {
-                            if let Some(sealed) = assembler.rotate_turn() {
-                                emit_sealed(&app, sealed, &mut store, &config,
-                                            &mut speakers, &mut sealed_entries);
-                            }
-                            open_lang = None;
-                            emit_partial(&app, &assembler);
+                            rotate_pending = true;
+                            pending_since_len = assembler.open_original_len();
                         }
                     }
                     None => {
@@ -421,8 +428,9 @@ async fn run_session(
                         play(&mut player, &mut readout_enabled, &tail, config.readout_speed);
                     }
                     finalize_entry(&app, &mut assembler, &mut store,
-                                   &config, &mut speakers, &mut sealed_entries);
+                                   &config, &mut sealed_entries);
                     open_lang = None;
+                    rotate_pending = false;
                     last_fragment_ms = 0;
                 } else if !paused
                     && assembler.open_original_len() >= MIN_SPLIT_CHARS
@@ -436,9 +444,10 @@ async fn run_session(
                     // translation can still land in the closing entry.
                     if let Some(sealed) = assembler.rotate_turn() {
                         emit_sealed(&app, sealed, &mut store, &config,
-                                    &mut speakers, &mut sealed_entries);
+                                    &mut sealed_entries);
                     }
                     open_lang = None;
+                    rotate_pending = false;
                     emit_partial(&app, &assembler);
                 }
             }
@@ -477,6 +486,17 @@ async fn run_session(
                         {
                             continue;
                         }
+                        // Deferred speaker-change split: the previous
+                        // speaker's text already ends at a sentence, so this
+                        // fragment starts the new voice's entry.
+                        if rotate_pending && assembler.open_ends_sentence() {
+                            if let Some(sealed) = assembler.rotate_turn() {
+                                emit_sealed(&app, sealed, &mut store, &config,
+                                            &mut sealed_entries);
+                            }
+                            open_lang = None;
+                            rotate_pending = false;
+                        }
                         // Language changed mid-stream (e.g. Japanese hand-off
                         // to Vietnamese): split so each entry stays in one
                         // language. Latin-generic text detects as None and
@@ -487,14 +507,31 @@ async fn run_session(
                             {
                                 if let Some(sealed) = assembler.rotate_turn() {
                                     emit_sealed(&app, sealed, &mut store, &config,
-                                                &mut speakers, &mut sealed_entries);
+                                                &mut sealed_entries);
                                 }
+                                rotate_pending = false;
                             }
                         }
                         if frag_lang.is_some() {
                             open_lang = frag_lang;
                         }
                         assembler.push_original(&text, last_chunk_ms);
+                        // The fragment just appended may have completed the
+                        // previous speaker's sentence — split now so the
+                        // next fragment starts fresh. The size cap keeps an
+                        // unpunctuated stream from merging voices forever.
+                        if rotate_pending
+                            && (assembler.open_ends_sentence()
+                                || assembler.open_original_len()
+                                    > pending_since_len + PENDING_SPLIT_MAX_EXTRA_CHARS)
+                        {
+                            if let Some(sealed) = assembler.rotate_turn() {
+                                emit_sealed(&app, sealed, &mut store, &config,
+                                            &mut sealed_entries);
+                            }
+                            open_lang = None;
+                            rotate_pending = false;
+                        }
                         last_fragment_ms = last_chunk_ms;
                         emit_partial(&app, &assembler);
                     }
@@ -527,9 +564,10 @@ async fn run_session(
                         // fragments can land in it.
                         if let Some(sealed) = assembler.rotate_turn() {
                             emit_sealed(&app, sealed, &mut store, &config,
-                                        &mut speakers, &mut sealed_entries);
+                                        &mut sealed_entries);
                         }
                         open_lang = None;
+                        rotate_pending = false;
                         last_fragment_ms = 0;
                     }
                     other => {
@@ -610,7 +648,7 @@ async fn run_session(
     alive.store(false, Ordering::SeqCst);
     capture_handle.stop();
     finalize_entry(&app, &mut assembler, &mut store, &config,
-                   &mut speakers, &mut sealed_entries);
+                   &mut sealed_entries);
     if let Some(rec) = recorder.as_mut() {
         if let Err(e) = rec.finalize() {
             log::error!("recording finalize failed: {e}");
@@ -621,17 +659,7 @@ async fn run_session(
         log::error!("finalize failed: {e}");
     }
     emit_status(&app, "ended", "");
-    // Speaker list from the reconciled timeline, not the provisional seals.
-    let mut speakers: BTreeSet<String> = sealed_entries
-        .iter()
-        .filter(|e| !e.speaker.is_empty())
-        .map(|e| e.speaker.clone())
-        .collect();
-    speakers.insert("You".into());
-    let _ = done_tx.send(Ok(ReviewData {
-        store,
-        speakers: speakers.into_iter().collect(),
-    }));
+    let _ = done_tx.send(Ok(ReviewData { store }));
 }
 
 /// Send gated samples to the output device, opening it lazily. If no output
@@ -661,7 +689,6 @@ fn emit_sealed(
     mut entry: crate::timeline::TimelineEntry,
     store: &mut MeetingStore,
     config: &AppConfig,
-    speakers: &mut BTreeSet<String>,
     sealed_entries: &mut Vec<crate::timeline::TimelineEntry>,
 ) {
     // echoTargetLanguage=false means passages already in the target
@@ -674,7 +701,6 @@ fn emit_sealed(
     {
         entry.translated = entry.original.clone();
     }
-    speakers.insert(entry.speaker.clone());
     append_and_emit(app, store, config, &entry);
     sealed_entries.push(entry);
 }
@@ -684,11 +710,10 @@ fn finalize_entry(
     assembler: &mut Assembler,
     store: &mut MeetingStore,
     config: &AppConfig,
-    speakers: &mut BTreeSet<String>,
     sealed_entries: &mut Vec<crate::timeline::TimelineEntry>,
 ) {
     for entry in assembler.finalize_turn() {
-        emit_sealed(app, entry, store, config, speakers, sealed_entries);
+        emit_sealed(app, entry, store, config, sealed_entries);
     }
 }
 

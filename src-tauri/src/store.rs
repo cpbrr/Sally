@@ -9,7 +9,6 @@
 use crate::error::{Result, SallyError};
 use crate::timeline::{format_timestamp, EntryKind, TimelineEntry};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -30,8 +29,6 @@ pub struct RecoveryJournal {
     pub open_original: String,
     pub open_translated: String,
     pub open_start_ms: u64,
-    /// Speaker renames chosen in review but not yet applied.
-    pub speaker_renames: BTreeMap<String, String>,
 }
 
 pub struct MeetingStore {
@@ -126,26 +123,6 @@ impl MeetingStore {
         })
     }
 
-    /// Speaker labels present in a raw transcript (for the rename list when
-    /// reopening a past meeting).
-    pub fn extract_speakers(raw_text: &str) -> Vec<String> {
-        let mut speakers: Vec<String> = Vec::new();
-        for line in raw_text.lines() {
-            if !line.starts_with('[') {
-                continue;
-            }
-            let Some(open) = line.find("**") else { continue };
-            let rest = &line[open + 2..];
-            let Some(close) = rest.find("**") else { continue };
-            let name = rest[..close].trim();
-            if !name.is_empty() && !speakers.iter().any(|s| s == name) {
-                speakers.push(name.to_string());
-            }
-        }
-        speakers.sort();
-        speakers
-    }
-
     pub fn raw_path(&self) -> &Path {
         &self.raw_path
     }
@@ -206,64 +183,6 @@ impl MeetingStore {
             std::fs::remove_file(jp)?;
         }
         Ok(())
-    }
-
-    /// Apply global speaker renames/merges to the raw file after review.
-    /// Rewrites atomically via a temp file.
-    pub fn apply_speaker_renames(&self, renames: &BTreeMap<String, String>) -> Result<()> {
-        if renames.is_empty() {
-            return Ok(());
-        }
-        let text = std::fs::read_to_string(&self.raw_path)?;
-        let updated = rename_speakers_in_markdown(&text, renames);
-        let tmp = self.raw_path.with_extension("md.tmp");
-        std::fs::write(&tmp, updated)?;
-        std::fs::rename(&tmp, &self.raw_path)?;
-        Ok(())
-    }
-
-    /// Apply per-entry speaker labels from the offline diarization pass:
-    /// each `[ts] **Meeting**` header whose timestamp appears in
-    /// `assignments` gets that entry's new label. Atomic rewrite; returns
-    /// how many entries changed.
-    pub fn relabel_entries(&self, assignments: &BTreeMap<u64, String>) -> Result<usize> {
-        if assignments.is_empty() {
-            return Ok(0);
-        }
-        let text = std::fs::read_to_string(&self.raw_path)?;
-        let mut changed = 0usize;
-        let updated: Vec<String> = text
-            .lines()
-            .map(|line| {
-                let Some(rest) = line.strip_prefix('[') else {
-                    return line.to_string();
-                };
-                let Some(close) = rest.find(']') else {
-                    return line.to_string();
-                };
-                let ts = &rest[..close];
-                let after = rest[close + 1..].trim_start();
-                if !after.starts_with("**Meeting**") {
-                    return line.to_string();
-                }
-                let Some(ms) = parse_timestamp_ms(ts) else {
-                    return line.to_string();
-                };
-                let Some(label) = assignments.get(&ms) else {
-                    return line.to_string();
-                };
-                changed += 1;
-                line.replacen("**Meeting**", &format!("**{label}**"), 1)
-            })
-            .collect();
-        let mut out = updated.join("\n");
-        if text.ends_with('\n') {
-            out.push('\n');
-        }
-        let tmp = self.raw_path.with_extension("md.tmp");
-        std::fs::write(&tmp, out)?;
-        std::fs::rename(&tmp, &self.raw_path)?;
-        Ok(changed)
     }
 
     /// Timestamp-free export: separate copy, source untouched (design §2, §8.1).
@@ -492,18 +411,6 @@ pub fn strip_timestamps(markdown: &str) -> String {
         .join("\n")
 }
 
-/// Rename bold speaker labels: `**Old**` becomes `**New**`, applied globally.
-pub fn rename_speakers_in_markdown(text: &str, renames: &BTreeMap<String, String>) -> String {
-    let mut out = text.to_string();
-    for (old, new) in renames {
-        if old.trim().is_empty() || new.trim().is_empty() {
-            continue;
-        }
-        out = out.replace(&format!("**{old}**"), &format!("**{}**", new.trim()));
-    }
-    out
-}
-
 fn sanitize_title(title: &str) -> String {
     title
         .trim()
@@ -576,19 +483,6 @@ mod tests {
         assert!(exported.contains("**You**"));
         let raw = std::fs::read_to_string(store.raw_path()).unwrap();
         assert!(raw.contains("[00:18]"), "raw keeps timestamps");
-    }
-
-    #[test]
-    fn speaker_rename_applies_globally() {
-        let mut renames = BTreeMap::new();
-        renames.insert("Speaker 1".to_string(), "Tanaka".to_string());
-        // Merge: Speaker 2 also becomes Tanaka.
-        renames.insert("Speaker 2".to_string(), "Tanaka".to_string());
-        let text = "[00:01] **Speaker 1**\n\nx\n\n[00:05] **Speaker 2**\n\ny\n";
-        let out = rename_speakers_in_markdown(text, &renames);
-        assert!(!out.contains("Speaker 1"));
-        assert!(!out.contains("Speaker 2"));
-        assert_eq!(out.matches("**Tanaka**").count(), 2);
     }
 
     #[test]
@@ -676,33 +570,6 @@ mod tests {
         let name = store.raw_path().file_name().unwrap().to_string_lossy().to_string();
         assert!(name.contains("Weekly-Sync"), "{name}");
         assert!(!name.contains(':'));
-    }
-
-    #[test]
-    fn relabel_rewrites_only_matching_meeting_headers() {
-        let (m, r) = tmp_dirs("relabel");
-        let mut store =
-            MeetingStore::create(m, r, chrono::Local::now(), "Vietnamese").unwrap();
-        store
-            .append_entry(&speech(0, 18_000, "Meeting", "first voice", "x"), "Vietnamese")
-            .unwrap();
-        store
-            .append_entry(&speech(1, 30_000, "You", "me", "y"), "Vietnamese")
-            .unwrap();
-        store
-            .append_entry(&speech(2, 45_000, "Meeting", "second voice", "z"), "Vietnamese")
-            .unwrap();
-        let mut a = BTreeMap::new();
-        a.insert(18_000u64, "Speaker 1".to_string());
-        a.insert(45_000u64, "Speaker 2".to_string());
-        let changed = store.relabel_entries(&a).unwrap();
-        assert_eq!(changed, 2);
-        let text = std::fs::read_to_string(store.raw_path()).unwrap();
-        assert!(text.contains("[00:18] **Speaker 1**"));
-        assert!(text.contains("[00:45] **Speaker 2**"));
-        assert!(text.contains("[00:30] **You**"), "You entries untouched");
-        assert!(!text.contains("**Meeting**"));
-        assert!(text.ends_with("\n\n"), "trailing block separator preserved");
     }
 
     #[test]

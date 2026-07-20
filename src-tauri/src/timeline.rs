@@ -109,6 +109,19 @@ impl Assembler {
         self.open.as_ref().map(|e| e.start_ms)
     }
 
+    /// Whether the open entry's original text currently ends at a sentence
+    /// boundary. Speaker-change rotations wait for this so a previous
+    /// speaker's lagging tail words drain into their own entry instead of
+    /// leaking into the next speaker's line.
+    pub fn open_ends_sentence(&self) -> bool {
+        const SENTENCE_END: [char; 8] = ['.', '!', '?', '。', '！', '？', '…', '．'];
+        self.open
+            .as_ref()
+            .and_then(|e| e.original.trim_end().chars().last())
+            .map(|c| SENTENCE_END.contains(&c))
+            .unwrap_or(false)
+    }
+
     /// Whether the open entry is (so far) attributed to the microphone.
     /// Speaker-change boundaries from the system lane must not split the
     /// user's own turns.

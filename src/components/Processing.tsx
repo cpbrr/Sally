@@ -1,7 +1,8 @@
 // Post-meeting flow. SavedPopup: small confirmation right after End
 // Meeting. ProcessingScreen: full-window pre-processing menu — pick any
-// past meeting from the raw folder, rename it and its speakers, choose
-// timestamps, optionally AI-clean, then open the result.
+// past meeting from the raw folder, rename it, choose timestamps,
+// optionally AI-clean (which also attributes speakers), then open the
+// result.
 
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { openPath } from "@tauri-apps/plugin-opener";
@@ -11,15 +12,12 @@ import { useSally } from "../store";
 import { IconFolder } from "./Icons";
 
 export function SavedPopup() {
-  const { dict, setPhase, diarizeState } = useSally();
+  const { dict, setPhase } = useSally();
   return (
     <div className="overlay">
       <div className="sheet">
         <h2>{dict.savedTitle}</h2>
         <p>{dict.savedBody}</p>
-        {diarizeState === "running" && (
-          <p className="field-hint">{dict.diarizeRunning}</p>
-        )}
         <div className="row end">
           <button className="btn" onClick={() => setPhase("idle")}>
             {dict.close}
@@ -34,10 +32,9 @@ export function SavedPopup() {
 }
 
 export function ProcessingScreen() {
-  const { dict, review, setReview, setPhase, diarizeState } = useSally();
+  const { dict, review, setReview, setPhase } = useSally();
   const [meetings, setMeetings] = useState<MeetingFile[]>([]);
   const [meetingTitle, setMeetingTitle] = useState("");
-  const [names, setNames] = useState<Record<string, string>>({});
   const [includeTimestamps, setIncludeTimestamps] = useState(true);
   const [aiCleanup, setAiCleanup] = useState(false);
   const [running, setRunning] = useState(false);
@@ -45,6 +42,32 @@ export function ProcessingScreen() {
   const [resultPath, setResultPath] = useState<string | null>(null);
   const [chunks, setChunks] = useState<TranscriptChunk[]>([]);
   const audioRef = useRef<HTMLAudioElement>(null);
+
+  // Load the meeting list; open the newest when nothing is selected yet.
+  useEffect(() => {
+    api
+      .listMeetings()
+      .then((list) => {
+        setMeetings(list);
+        if (!review && list.length > 0) {
+          selectMeeting(list[0].path);
+        }
+      })
+      .catch((e) => setError(String(e)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const selectMeeting = async (path: string) => {
+    setError("");
+    setResultPath(null);
+    setMeetingTitle("");
+    try {
+      const info = await api.openMeeting(path);
+      setReview(info);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
 
   // Clickable transcript blocks for the recording, refreshed whenever a
   // meeting with a recording is (re)opened.
@@ -63,64 +86,12 @@ export function ProcessingScreen() {
     el.play().catch(() => {});
   };
 
-  // Background speaker identification finished: reload the meeting so the
-  // new "Speaker N" labels appear — but never over the user's typed
-  // renames or a finished processing run.
-  useEffect(() => {
-    if (diarizeState !== "done" || !review || resultPath !== null) return;
-    const untouched = Object.entries(names).every(([o, n]) => n === o);
-    if (untouched) {
-      selectMeeting(review.raw_path);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [diarizeState]);
-
-  // Load the meeting list; open the newest when nothing is selected yet.
-  useEffect(() => {
-    api
-      .listMeetings()
-      .then((list) => {
-        setMeetings(list);
-        if (!review && list.length > 0) {
-          selectMeeting(list[0].path);
-        }
-      })
-      .catch((e) => setError(String(e)));
-    if (review) {
-      setNames(Object.fromEntries(review.speakers.map((s) => [s, s])));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const selectMeeting = async (path: string) => {
-    setError("");
-    setResultPath(null);
-    setMeetingTitle("");
-    try {
-      const info = await api.openMeeting(path);
-      setReview(info);
-      setNames(Object.fromEntries(info.speakers.map((s) => [s, s])));
-    } catch (e) {
-      setError(String(e));
-    }
-  };
-
-  const renameable = (review?.speakers ?? []).filter(
-    (s) => s !== "You" && s !== "Meeting"
-  );
-
   const run = async () => {
     if (!review) return;
     setError("");
     setRunning(true);
     try {
-      const renames = Object.fromEntries(
-        Object.entries(names).filter(([o, n]) => n.trim() && n.trim() !== o)
-      );
-      const updated = await api.applyReview(
-        renames,
-        meetingTitle.trim() || undefined
-      );
+      const updated = await api.applyReview(meetingTitle.trim() || undefined);
       setReview(updated);
       // One timestamps choice for everything: when excluded, the export
       // copy is written and the AI cleanup also omits them.
@@ -215,31 +186,6 @@ export function ProcessingScreen() {
                 placeholder="Untitled meeting"
               />
             </label>
-
-            {diarizeState === "running" && (
-              <p className="field-hint">{dict.diarizeRunning}</p>
-            )}
-            {diarizeState === "failed" && (
-              <p className="field-hint">{dict.diarizeFailed}</p>
-            )}
-            {renameable.length > 0 && (
-              <>
-                <h3>{dict.reviewSpeakers}</h3>
-                <p className="field-hint">{dict.reviewSpeakersHint}</p>
-                {renameable.map((s) => (
-                  <div className="speaker-row" key={s}>
-                    <span className="orig">{s}</span>
-                    <input
-                      type="text"
-                      value={names[s] ?? s}
-                      onChange={(e) =>
-                        setNames({ ...names, [s]: e.target.value })
-                      }
-                    />
-                  </div>
-                ))}
-              </>
-            )}
 
             <label className="check">
               <input

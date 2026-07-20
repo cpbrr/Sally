@@ -66,15 +66,13 @@ readout is captured back by loopback and re-enters the pipeline.
 
 ## Speakers
 
-During the meeting, entries are attributed locally by audio activity: turns
-dominated by microphone energy are labeled `You`, everything else `Meeting`.
-After the meeting ends, an offline pass over the saved recording identifies
-distinct remote voices and relabels `Meeting` lines as `Speaker 1..N` —
-fully local (kaldi-style filterbanks plus a WeSpeaker CAM++ ONNX embedding
-model, downloaded once to `models/`), running in the background so ending a
-meeting stays instant. Labels can then be renamed or merged in the review
-screen. Tune clustering with `SALLY_DIAR_THRESHOLD` in `.env` (0.05–0.95,
-higher = more distinct speakers); disable with `SALLY_DIARIZE=off`.
+Entries are attributed locally by audio activity: turns dominated by
+microphone energy are labeled `You`, everything else `Meeting`. Remote
+lines still split per voice (segmentation model on the system lane), but
+they all keep the `Meeting` label in the raw transcript. The optional AI
+clean & summarize step attributes speakers: Gemini works out who is
+speaking from the conversation itself and labels remote lines per person
+in the polished file, keeping the raw file untouched.
 
 ## Privacy
 
