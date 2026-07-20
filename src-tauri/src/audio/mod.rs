@@ -10,6 +10,8 @@
 #[cfg(windows)]
 pub mod app_capture;
 pub mod capture;
+#[cfg(target_os = "macos")]
+pub mod sck_capture;
 pub mod pipeline;
 pub mod playback;
 pub mod recorder;

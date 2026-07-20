@@ -60,9 +60,12 @@ readout is captured back by loopback and re-enters the pipeline.
 
 - **Windows 11 x64** — microphone capture and WASAPI loopback system audio
   implemented.
-- **macOS 14+ (Apple Silicon)** — microphone works via cpal; the
-  ScreenCaptureKit system-audio adapter is not implemented yet
-  (`src-tauri/src/audio/capture.rs`), and signing/notarization is pending.
+- **macOS 13+ (Apple Silicon)** — microphone via cpal; system audio via
+  ScreenCaptureKit (`src-tauri/src/audio/sck_capture.rs`) — no BlackHole
+  needed. Grant Screen Recording permission when prompted; a BlackHole-style
+  loopback device still works as fallback if permission is denied. The DMG
+  is unsigned (signing/notarization pending): right-click → Open on first
+  launch.
 
 ## Speakers
 
