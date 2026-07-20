@@ -462,7 +462,7 @@ async fn run_session(
                     }
                     open_lang = None;
                     rotate_pending = false;
-                    emit_partial(&app, &assembler);
+                    emit_partial(&app, &assembler, &config);
                 }
             }
 
@@ -547,12 +547,12 @@ async fn run_session(
                             rotate_pending = false;
                         }
                         last_fragment_ms = last_chunk_ms;
-                        emit_partial(&app, &assembler);
+                        emit_partial(&app, &assembler, &config);
                     }
                     Some(LiveEvent::Translated(text)) => {
                         assembler.push_translated(&text, last_chunk_ms);
                         last_fragment_ms = last_chunk_ms;
-                        emit_partial(&app, &assembler);
+                        emit_partial(&app, &assembler, &config);
                     }
                     Some(LiveEvent::Audio(samples)) => {
                         if readout_enabled && !paused {
@@ -764,8 +764,16 @@ fn append_and_emit(
     let _ = app.emit("sally://partial", json!(null));
 }
 
-fn emit_partial(app: &AppHandle, assembler: &Assembler) {
-    if let Some(p) = assembler.partial() {
+fn emit_partial(app: &AppHandle, assembler: &Assembler, config: &AppConfig) {
+    if let Some(mut p) = assembler.partial() {
+        // Same target-language mirroring as emit_sealed, applied live so
+        // the translated panel doesn't sit empty until the turn seals.
+        if crate::lang::detect(&p.original)
+            .map(|l| l == crate::lang::bcp47(&config.target_language))
+            .unwrap_or(false)
+        {
+            p.translated = p.original.clone();
+        }
         let _ = app.emit("sally://partial", p);
     }
 }

@@ -109,14 +109,16 @@ pub fn start_capture(
         }
     }
     if !app_capture_active {
-        threads.push(spawn_system_thread(
+        let (handle, app_isolated) = spawn_system_thread(
             system_device.to_string(),
             capture_app.to_string(),
             mac_capture_method.to_string(),
             session_start,
             tx,
             stop.clone(),
-        )?);
+        )?;
+        threads.push(handle);
+        app_capture_active = app_isolated;
     }
 
     Ok(CaptureHandle {
@@ -172,6 +174,10 @@ fn spawn_mic_thread(
     }, stop)
 }
 
+/// Returns the capture thread and whether a specific app's audio was
+/// successfully isolated (vs. falling back to whole-system capture) — the
+/// caller uses this to decide whether the "app has no audio session"
+/// warning applies.
 fn spawn_system_thread(
     device_name: String,
     capture_app: String,
@@ -179,16 +185,17 @@ fn spawn_system_thread(
     session_start: Instant,
     tx: mpsc::Sender<RawFrame>,
     stop: Arc<AtomicBool>,
-) -> Result<std::thread::JoinHandle<()>> {
+) -> Result<(std::thread::JoinHandle<()>, bool)> {
     #[cfg(target_os = "macos")]
     {
         let mut attempts: Vec<String> = Vec::new();
+        let want_app = !capture_app.is_empty();
 
         // A specific app can only be isolated through ScreenCaptureKit's
         // per-application filter today — the Core Audio tap only knows how
         // to tap everything — so a capture_app selection skips straight to
         // SCK regardless of OS version or the method preference below.
-        let want_tap = capture_app.is_empty()
+        let want_tap = !want_app
             && match mac_capture_method.as_str() {
                 "tap" => true,
                 "screencapturekit" => false,
@@ -200,7 +207,7 @@ fn spawn_system_thread(
         if want_tap {
             match super::coreaudio_tap::spawn_tap_capture(session_start, tx.clone(), stop.clone())
             {
-                Ok(handle) => return Ok(handle),
+                Ok(handle) => return Ok((handle, false)),
                 Err(e) => {
                     log::warn!("Core Audio process tap unavailable, trying ScreenCaptureKit: {e}");
                     attempts.push(format!("Core Audio tap: {e}"));
@@ -214,7 +221,7 @@ fn spawn_system_thread(
             stop.clone(),
             capture_app,
         ) {
-            Ok(handle) => return Ok(handle),
+            Ok(handle) => return Ok((handle, want_app)),
             Err(e) => {
                 log::warn!("ScreenCaptureKit unavailable, falling back to loopback device: {e}");
                 attempts.push(format!("ScreenCaptureKit: {e}"));
@@ -245,7 +252,8 @@ fn spawn_system_thread(
                 build_stream(&device, &config, AudioSource::System, session_start, tx)
             },
             stop,
-        );
+        )
+        .map(|handle| (handle, false));
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -260,6 +268,7 @@ fn spawn_system_thread(
                 .map_err(|e| SallyError::Audio(format!("loopback config: {e}")))?;
             build_stream(&device, &config, AudioSource::System, session_start, tx)
         }, stop)
+        .map(|handle| (handle, false))
     }
 }
 

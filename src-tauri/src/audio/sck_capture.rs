@@ -74,6 +74,31 @@ impl SCStreamOutputTrait for AudioHandler {
     }
 }
 
+/// System UI chrome that ScreenCaptureKit reports as owning an on-screen
+/// window (so the window-ownership filter alone doesn't catch it) but that
+/// never has meeting audio of its own. `objc2-core-audio`/`screencapturekit`
+/// expose no "is a regular, Dock-visible app" flag (that's
+/// `NSApplicationActivationPolicy`, not surfaced by this crate), so this is
+/// a plain name denylist alongside the window-ownership check.
+const SYSTEM_UI_DENYLIST: &[&str] = &[
+    "dock",
+    "finder",
+    "control center",
+    "notification center",
+    "notificationcenter",
+    "spotlight",
+    "siri",
+    "systemuiserver",
+    "windowserver",
+    "loginwindow",
+    "coreservicesuiagent",
+    "universal control",
+    "universalcontrol",
+    "coreauthd",
+    "textinputmenuagent",
+    "wallpaperagent",
+];
+
 /// Applications ScreenCaptureKit can see right now, for the per-app capture
 /// picker. Requires Screen Recording permission to populate; empty (not an
 /// error) when it isn't granted yet, matching the Windows picker's shape.
@@ -81,9 +106,11 @@ impl SCStreamOutputTrait for AudioHandler {
 /// `SCShareableContent::applications()` lists every running process with
 /// any UI presence at all — background agents like CoreServicesUIAgent,
 /// loginwindow, universalcontrol, coreauthd have no audio of their own and
-/// just clutter the picker. Only apps that own at least one on-screen
-/// window are kept, which is the closest signal this crate exposes to
-/// "an app the user would actually recognize."
+/// just clutter the picker. Kept apps must own at least one on-screen
+/// window (the closest signal this crate exposes to "an app the user would
+/// actually recognize") and not be persistent system UI chrome (Dock,
+/// Finder, Control Center, Notification Center, …), which owns windows too
+/// but is never a meeting-audio source.
 pub fn list_audio_apps() -> Vec<String> {
     let Ok(content) = SCShareableContent::get() else {
         return Vec::new();
@@ -100,7 +127,11 @@ pub fn list_audio_apps() -> Vec<String> {
         .applications()
         .into_iter()
         .map(|a| a.application_name())
-        .filter(|n| !n.is_empty() && visible_owners.contains(n))
+        .filter(|n| {
+            !n.is_empty()
+                && visible_owners.contains(n)
+                && !SYSTEM_UI_DENYLIST.contains(&n.to_lowercase().as_str())
+        })
         .collect();
     names.into_iter().collect()
 }

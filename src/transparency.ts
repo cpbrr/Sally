@@ -8,6 +8,14 @@ const MIN = 40;
 const MAX = 100;
 
 let translucent = false;
+const listeners = new Set<(on: boolean) => void>();
+
+/** Stay in sync with translucency changes made from any component — e.g.
+ * the corner-tools toggle button reflecting a change made in Settings. */
+export function onTranslucentChange(fn: (on: boolean) => void): () => void {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
 
 export function loadLevel(): number {
   const raw = Number(localStorage.getItem(LEVEL_KEY));
@@ -27,6 +35,7 @@ function apply(): void {
 export function setTranslucent(on: boolean): void {
   translucent = on;
   apply();
+  listeners.forEach((fn) => fn(on));
 }
 
 export function setLevel(percent: number): void {

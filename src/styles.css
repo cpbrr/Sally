@@ -306,7 +306,7 @@ select:focus, input:focus { outline: 1px solid var(--accent); }
 .issue-indicator .icon-btn.issue-warn { color: var(--warn); }
 .issue-bubble {
   position: absolute;
-  top: 30px;
+  bottom: 30px;
   right: 0;
   z-index: 40;
   width: 260px;
