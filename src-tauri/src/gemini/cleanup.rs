@@ -69,7 +69,7 @@ pub fn split_sections(raw: &str, budget: usize) -> Vec<String> {
     sections
 }
 
-fn cleanup_prompt(include_timestamps: bool, context: &str) -> String {
+fn cleanup_prompt(include_timestamps: bool, include_original: bool, context: &str) -> String {
     let mut p = format!(
         "You clean up a raw meeting transcript section. Rules:\n\
          - Preserve the meaning of every passage exactly; never invent facts.\n\
@@ -170,10 +170,11 @@ impl CleanupClient {
         &self,
         section: &str,
         include_timestamps: bool,
+        include_original: bool,
         context: &str,
     ) -> Result<String> {
         let body = json!({
-            "systemInstruction": { "parts": [{ "text": cleanup_prompt(include_timestamps, context) }] },
+            "systemInstruction": { "parts": [{ "text": cleanup_prompt(include_timestamps, include_original, context) }] },
             "contents": [{ "role": "user", "parts": [{ "text": section }] }]
         });
         let value = self.generate(body).await?;

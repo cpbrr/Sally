@@ -293,10 +293,15 @@ pub async fn resume_meeting(state: State<'_, AppState>) -> Result<()> {
     send_control(&state, Control::Resume).await
 }
 
-/// Set translated-voice readout volume (0.0–1.0). Persists to `.env` and
-/// applies live to a running meeting.
+/// Set translated-voice readout volume (0.0–1.0), applied live to a
+/// running meeting. `persist=false` for drag ticks (in-memory + live
+/// only); `persist=true` on release writes `.env`.
 #[tauri::command]
-pub async fn set_readout_volume(state: State<'_, AppState>, volume: f32) -> Result<RedactedConfig> {
+pub async fn set_readout_volume(
+    state: State<'_, AppState>,
+    volume: f32,
+    persist: bool,
+) -> Result<RedactedConfig> {
     let clamped = volume.clamp(0.0, 1.0);
     let redacted = {
         let mut guard = state.config.lock().await;
@@ -304,7 +309,9 @@ pub async fn set_readout_volume(state: State<'_, AppState>, volume: f32) -> Resu
             .as_mut()
             .ok_or_else(|| SallyError::Config("setup not completed".into()))?;
         cfg.readout_volume = clamped;
-        cfg.save()?;
+        if persist {
+            cfg.save()?;
+        }
         cfg.redacted()
     };
     let guard = state.session.lock().await;
@@ -472,6 +479,7 @@ pub async fn export_without_timestamps(state: State<'_, AppState>) -> Result<Str
 pub async fn clean_and_summarize(
     state: State<'_, AppState>,
     include_timestamps: bool,
+    include_original: bool,
 ) -> Result<String> {
     let cfg = require_config(&state).await?;
     let (raw_text, polished_path, title) = {
@@ -506,7 +514,7 @@ pub async fn clean_and_summarize(
             .unwrap_or_default();
         cleaned_parts.push(
             client
-                .clean_section(section, include_timestamps, &context)
+                .clean_section(section, include_timestamps, include_original, &context)
                 .await?,
         );
     }

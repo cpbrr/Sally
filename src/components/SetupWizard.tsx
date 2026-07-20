@@ -2,6 +2,7 @@
 // privacy disclosure, permissions note, connectivity test.
 
 import { open } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useState } from "react";
 import { api } from "../api";
 import { UiLanguage } from "../i18n";
@@ -93,6 +94,12 @@ export function SetupWizard() {
               />
             </label>
             <p className="field-hint">{dict.setupApiKeyHint}</p>
+            <button
+              className="btn"
+              onClick={() => openUrl("https://aistudio.google.com/api-keys")}
+            >
+              {dict.getApiKeyLink}
+            </button>
           </>
         )}
         {step === 2 && (
