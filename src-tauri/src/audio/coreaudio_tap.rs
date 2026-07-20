@@ -18,7 +18,7 @@
 
 use super::{AudioSource, RawFrame};
 use crate::error::{Result, SallyError};
-use objc2::top_level_traits::AnyThread;
+use objc2::AnyThread;
 use objc2_core_audio::{
     kAudioAggregateDeviceIsPrivateKey, kAudioAggregateDeviceIsStackedKey,
     kAudioAggregateDeviceMainSubDeviceKey, kAudioAggregateDeviceNameKey,
@@ -33,7 +33,7 @@ use objc2_core_audio::{
     AudioHardwareDestroyAggregateDevice, AudioHardwareDestroyProcessTap, AudioObjectGetPropertyData,
     AudioObjectID, AudioObjectPropertyAddress, CATapDescription,
 };
-use objc2_core_audio_types::{AudioBuffer, AudioBufferList, AudioTimeStamp};
+use objc2_core_audio_types::{AudioBufferList, AudioTimeStamp};
 use objc2_core_foundation::{
     kCFBooleanFalse, kCFBooleanTrue, CFArray, CFDictionary, CFRetained, CFString, CFType,
     ConcreteType,
