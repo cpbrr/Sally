@@ -564,7 +564,27 @@ async fn run_session(
                             // Never read the user's own mic speech back to
                             // them translated — only remote (Meeting) turns
                             // qualify.
-                            if !assembler.open_mic_dominated() {
+                            //
+                            // macOS only: ScreenCaptureKit's per-application
+                            // audio filter is reportedly less exact than its
+                            // per-app *video* filter — audio capture can
+                            // still include more than the selected app, so
+                            // Sally's own readout can loop back in as "new"
+                            // remote speech even with a specific app
+                            // selected (this doesn't happen on Windows,
+                            // where per-app process-loopback is exact).
+                            // Suppress audio events that arrive while our
+                            // own readout was active in roughly the same
+                            // window the echo-window text filter already
+                            // uses, to stop the retranslate-and-repeat loop
+                            // this produces.
+                            #[cfg(target_os = "macos")]
+                            let self_echo_likely = last_playback_at
+                                .map(|t| t.elapsed() < Duration::from_millis(4000))
+                                .unwrap_or(false);
+                            #[cfg(not(target_os = "macos"))]
+                            let self_echo_likely = false;
+                            if !assembler.open_mic_dominated() && !self_echo_likely {
                                 play(&mut player, &mut readout_enabled, &playable, readout_volume);
                             }
                         }
