@@ -22,10 +22,40 @@ const STATUS_KEYS: Record<string, string> = {
   "storage-error": "statusStorageError",
 };
 
+const TEXT_SCALES = [1, 1.15, 1.3, 0.9];
+
 export function TitleBar() {
   const { dict, status, config, setConfig, showSettings, setShowSettings } =
     useSally();
   const [pinned, setPinned] = useState(config?.always_on_top ?? false);
+  const [volume, setVolume] = useState(config?.readout_volume ?? 1);
+  const [textScale, setTextScale] = useState(() => {
+    const saved = Number(localStorage.getItem("sally.textscale"));
+    return TEXT_SCALES.includes(saved) ? saved : 1;
+  });
+
+  useEffect(() => {
+    setVolume(config?.readout_volume ?? 1);
+  }, [config?.readout_volume]);
+
+  // Transcript text size, applied via CSS variable and persisted locally.
+  useEffect(() => {
+    document.documentElement.style.setProperty(
+      "--text-scale",
+      String(textScale)
+    );
+    localStorage.setItem("sally.textscale", String(textScale));
+  }, [textScale]);
+
+  const cycleTextScale = () => {
+    const i = TEXT_SCALES.indexOf(textScale);
+    setTextScale(TEXT_SCALES[(i + 1) % TEXT_SCALES.length]);
+  };
+
+  const commitVolume = async (v: number) => {
+    const updated = await api.setReadoutVolume(v).catch(() => null);
+    if (updated) setConfig(updated);
+  };
 
   // Apply the configured default (off unless enabled in Settings) once the
   // config loads; the pin button overrides it for this window.
@@ -69,6 +99,24 @@ export function TitleBar() {
         onClick={toggleReadout}
       >
         {config?.readout_enabled ? <IconSpeakerOn /> : <IconSpeakerOff />}
+      </button>
+      <input
+        className="volume-slider"
+        type="range"
+        min={0}
+        max={100}
+        value={Math.round(volume * 100)}
+        title={dict.readoutVolume}
+        onChange={(e) => setVolume(Number(e.target.value) / 100)}
+        onPointerUp={() => commitVolume(volume)}
+        onKeyUp={() => commitVolume(volume)}
+      />
+      <button
+        className="icon-btn text-size-btn"
+        title={dict.textSize}
+        onClick={cycleTextScale}
+      >
+        A
       </button>
       <button
         className={`icon-btn ${pinned ? "active" : ""}`}

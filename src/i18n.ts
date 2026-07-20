@@ -16,6 +16,8 @@ const en = {
   readoutOn: "Read translation aloud (skips speech already in the target language)",
   readoutOff: "Stop reading translation aloud",
   readoutSetting: "Read translation aloud",
+  readoutVolume: "Readout volume",
+  textSize: "Text size",
   readoutHint:
     "Speaks the translated voice for passages not already in the target language. Vietnamese speech is never read out when translating into Vietnamese. Use headphones to avoid the translation being captured back into the meeting.",
   settings: "Settings",
@@ -94,6 +96,8 @@ const en = {
   // settings
   settingsTitle: "Settings",
   micDevice: "Microphone",
+  micDeviceHint:
+    "Bluetooth headset microphones (e.g. AirPods) force the whole headset into low-quality hands-free mode while recording — meeting audio then sounds like a phone call. Prefer the built-in microphone and keep the headset for listening only.",
   systemDevice: "System audio device",
   systemDefault: "System default",
   captureSource: "Capture audio from",
@@ -135,6 +139,8 @@ const vi: typeof en = {
   readoutOn: "Đọc to bản dịch (bỏ qua lời nói đã ở ngôn ngữ đích)",
   readoutOff: "Tắt đọc to bản dịch",
   readoutSetting: "Đọc to bản dịch",
+  readoutVolume: "Âm lượng đọc",
+  textSize: "Cỡ chữ",
   readoutHint:
     "Phát giọng dịch cho các đoạn chưa ở ngôn ngữ đích. Lời nói tiếng Việt sẽ không được đọc to khi dịch sang tiếng Việt. Nên dùng tai nghe để giọng dịch không bị thu ngược vào cuộc họp.",
   settings: "Cài đặt",
@@ -207,6 +213,8 @@ const vi: typeof en = {
   recovered: "Đã khôi phục:",
   settingsTitle: "Cài đặt",
   micDevice: "Micrô",
+  micDeviceHint:
+    "Micrô tai nghe Bluetooth (ví dụ AirPods) buộc cả tai nghe chuyển sang chế độ đàm thoại chất lượng thấp khi thu — âm thanh cuộc họp nghe như điện thoại. Nên dùng micrô máy tính và chỉ nghe qua tai nghe.",
   systemDevice: "Thiết bị âm thanh hệ thống",
   systemDefault: "Mặc định hệ thống",
   captureSource: "Thu âm thanh từ",

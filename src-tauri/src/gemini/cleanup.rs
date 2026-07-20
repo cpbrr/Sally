@@ -82,8 +82,8 @@ fn cleanup_prompt(include_timestamps: bool, context: &str) -> String {
          same voice throughout. When one entry clearly contains two \
          people, split it into separate entries at the handover.\n\
          - Keep the exact Markdown structure of entries: a `[mm:ss]` \
-         timestamp, the bold speaker label, the `Original:` line, and the \
-         translation line.\n\
+         timestamp, the bold speaker label, the `Original:` line, then a \
+         blank line, then the translation line.\n\
          - Mark genuinely unclear passages with [unclear].\n\
          - Keep both the original text and its translation lines.\n\
          - {} timestamps.\n\
