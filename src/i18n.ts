@@ -106,6 +106,12 @@ const en = {
     "Bluetooth headset microphones (e.g. AirPods) force the whole headset into low-quality hands-free mode while recording — meeting audio then sounds like a phone call. Prefer the built-in microphone and keep the headset for listening only.",
   systemDevice: "System audio device",
   systemDefault: "System default",
+  macCaptureMethod: "macOS capture method",
+  macCaptureAuto: "Auto (recommended)",
+  macCaptureTap: "Core Audio tap",
+  macCaptureSCK: "ScreenCaptureKit",
+  macCaptureMethodHint:
+    "Auto picks the Core Audio tap on macOS 14.4+ (no Screen Recording permission needed) and falls back to ScreenCaptureKit on older macOS. Override only if one path isn't working for you.",
   captureSource: "Capture audio from",
   entireSystem: "Entire system",
   captureSourceHint:
@@ -228,6 +234,12 @@ const vi: typeof en = {
     "Micrô tai nghe Bluetooth (ví dụ AirPods) buộc cả tai nghe chuyển sang chế độ đàm thoại chất lượng thấp khi thu — âm thanh cuộc họp nghe như điện thoại. Nên dùng micrô máy tính và chỉ nghe qua tai nghe.",
   systemDevice: "Thiết bị âm thanh hệ thống",
   systemDefault: "Mặc định hệ thống",
+  macCaptureMethod: "Phương thức thu âm macOS",
+  macCaptureAuto: "Tự động (khuyên dùng)",
+  macCaptureTap: "Core Audio tap",
+  macCaptureSCK: "ScreenCaptureKit",
+  macCaptureMethodHint:
+    "Tự động chọn Core Audio tap trên macOS 14.4+ (không cần quyền Ghi màn hình) và dùng ScreenCaptureKit trên macOS cũ hơn. Chỉ đổi khi một phương thức không hoạt động.",
   captureSource: "Thu âm thanh từ",
   entireSystem: "Toàn bộ hệ thống",
   captureSourceHint:

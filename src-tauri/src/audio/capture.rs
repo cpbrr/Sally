@@ -64,12 +64,16 @@ pub fn list_output_devices() -> Vec<String> {
 
 /// Start microphone and system-audio capture. Frames are pushed to `tx`
 /// with timestamps from `session_start` (monotonic clock, design §5).
-/// `capture_app` selects a single application (executable name) for system
-/// audio via process loopback on Windows; empty captures the whole device.
+/// `capture_app` selects a single application for system audio — process
+/// loopback on Windows, a ScreenCaptureKit app filter on macOS; empty
+/// captures the whole device. `mac_capture_method` overrides macOS's
+/// automatic tap/ScreenCaptureKit choice ("auto", "tap", or
+/// "screencapturekit"); ignored elsewhere.
 pub fn start_capture(
     mic_device: &str,
     system_device: &str,
     capture_app: &str,
+    mac_capture_method: &str,
     session_start: Instant,
     tx: mpsc::Sender<RawFrame>,
 ) -> Result<CaptureHandle> {
@@ -104,12 +108,11 @@ pub fn start_capture(
             }
         }
     }
-    #[cfg(not(windows))]
-    let _ = capture_app;
-
     if !app_capture_active {
         threads.push(spawn_system_thread(
             system_device.to_string(),
+            capture_app.to_string(),
+            mac_capture_method.to_string(),
             session_start,
             tx,
             stop.clone(),
@@ -171,6 +174,8 @@ fn spawn_mic_thread(
 
 fn spawn_system_thread(
     device_name: String,
+    capture_app: String,
+    mac_capture_method: String,
     session_start: Instant,
     tx: mpsc::Sender<RawFrame>,
     stop: Arc<AtomicBool>,
@@ -178,11 +183,21 @@ fn spawn_system_thread(
     #[cfg(target_os = "macos")]
     {
         let mut attempts: Vec<String> = Vec::new();
-        let prefer_tap = macos_version()
-            .map(|(major, minor)| major > 14 || (major == 14 && minor >= 4))
-            .unwrap_or(false);
 
-        if prefer_tap {
+        // A specific app can only be isolated through ScreenCaptureKit's
+        // per-application filter today — the Core Audio tap only knows how
+        // to tap everything — so a capture_app selection skips straight to
+        // SCK regardless of OS version or the method preference below.
+        let want_tap = capture_app.is_empty()
+            && match mac_capture_method.as_str() {
+                "tap" => true,
+                "screencapturekit" => false,
+                _ => macos_version()
+                    .map(|(major, minor)| major > 14 || (major == 14 && minor >= 4))
+                    .unwrap_or(false),
+            };
+
+        if want_tap {
             match super::coreaudio_tap::spawn_tap_capture(session_start, tx.clone(), stop.clone())
             {
                 Ok(handle) => return Ok(handle),
@@ -193,7 +208,12 @@ fn spawn_system_thread(
             }
         }
 
-        match super::sck_capture::spawn_sck_capture(session_start, tx.clone(), stop.clone()) {
+        match super::sck_capture::spawn_sck_capture(
+            session_start,
+            tx.clone(),
+            stop.clone(),
+            capture_app,
+        ) {
             Ok(handle) => return Ok(handle),
             Err(e) => {
                 log::warn!("ScreenCaptureKit unavailable, falling back to loopback device: {e}");
@@ -228,16 +248,19 @@ fn spawn_system_thread(
         );
     }
     #[cfg(not(target_os = "macos"))]
-    spawn_capture_thread(move || {
-        let host = cpal::default_host();
-        // WASAPI loopback: open an *input* stream on an output device.
-        let device = find_output_device(&host, &device_name)
-            .ok_or_else(|| SallyError::Audio("no output device for loopback capture".into()))?;
-        let config = device
-            .default_output_config()
-            .map_err(|e| SallyError::Audio(format!("loopback config: {e}")))?;
-        build_stream(&device, &config, AudioSource::System, session_start, tx)
-    }, stop)
+    {
+        let _ = (&capture_app, &mac_capture_method);
+        spawn_capture_thread(move || {
+            let host = cpal::default_host();
+            // WASAPI loopback: open an *input* stream on an output device.
+            let device = find_output_device(&host, &device_name)
+                .ok_or_else(|| SallyError::Audio("no output device for loopback capture".into()))?;
+            let config = device
+                .default_output_config()
+                .map_err(|e| SallyError::Audio(format!("loopback config: {e}")))?;
+            build_stream(&device, &config, AudioSource::System, session_start, tx)
+        }, stop)
+    }
 }
 
 /// `(major, minor)` from `sw_vers -productVersion`, best-effort. Used only

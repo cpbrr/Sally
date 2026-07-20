@@ -98,6 +98,7 @@ pub fn start(app: AppHandle, config: AppConfig) -> Result<SessionHandle> {
         &config.mic_device,
         &config.system_device,
         &config.capture_app,
+        &config.mac_capture_method,
         session_start,
         frame_tx,
     )?;
@@ -706,12 +707,17 @@ fn emit_sealed(
     sealed_entries: &mut Vec<crate::timeline::TimelineEntry>,
 ) {
     // echoTargetLanguage=false means passages already in the target
-    // language get no model translation; mirror the original so the
-    // translation panel stays complete.
-    if entry.translated.is_empty()
-        && crate::lang::detect(&entry.original)
-            .map(|l| l == crate::lang::bcp47(&config.target_language))
-            .unwrap_or(false)
+    // language should get no model translation, but the model is
+    // inconsistent about actually staying silent — sometimes it echoes a
+    // partial fragment anyway, which used to survive here because this
+    // only filled in when `translated` was still empty. Whenever local
+    // detection is confident the passage is already in the target
+    // language, mirror the original unconditionally: that's what the
+    // "translation" trivially is, and it's more consistent than trusting
+    // whatever fragment (or nothing) Gemini happened to send.
+    if crate::lang::detect(&entry.original)
+        .map(|l| l == crate::lang::bcp47(&config.target_language))
+        .unwrap_or(false)
     {
         entry.translated = entry.original.clone();
     }

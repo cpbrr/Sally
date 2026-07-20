@@ -15,6 +15,7 @@ import {
   setTranslucent,
 } from "../transparency";
 import { IconChevron, IconEye, IconEyeOff, IconRefresh, IconReset } from "./Icons";
+import { isMac } from "../platform";
 
 export function Settings() {
   const { dict, config, setConfig, setUiLanguage, setShowSettings, phase } =
@@ -34,6 +35,7 @@ export function Settings() {
     live_model: config?.live_model ?? "",
     cleanup_model: config?.cleanup_model ?? "",
     save_audio: config?.save_audio ?? true,
+    mac_capture_method: config?.mac_capture_method ?? "auto",
   });
   const [error, setError] = useState("");
   const [translucent, setTranslucentState] = useState(isTranslucent());
@@ -134,7 +136,7 @@ export function Settings() {
             ))}
           </select>
         </label>
-        <p className="field-hint">{dict.micDeviceHint}</p>
+        {!isMac() && <p className="field-hint">{dict.micDeviceHint}</p>}
 
         <label>
           {dict.systemDevice}
@@ -201,6 +203,27 @@ export function Settings() {
 
         {showAdvanced && (
           <>
+            {isMac() && (
+              <label>
+                {dict.macCaptureMethod}
+                <select
+                  value={form.mac_capture_method}
+                  onChange={(e) =>
+                    setForm({ ...form, mac_capture_method: e.target.value })
+                  }
+                >
+                  <option value="auto">{dict.macCaptureAuto}</option>
+                  <option value="tap">{dict.macCaptureTap}</option>
+                  <option value="screencapturekit">
+                    {dict.macCaptureSCK}
+                  </option>
+                </select>
+              </label>
+            )}
+            {isMac() && (
+              <p className="field-hint">{dict.macCaptureMethodHint}</p>
+            )}
+
             <label>
               {dict.setupApiKey}
               <div className="row">

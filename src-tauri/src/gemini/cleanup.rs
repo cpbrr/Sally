@@ -80,7 +80,12 @@ fn cleanup_prompt(include_timestamps: bool, include_original: bool, context: &st
          distinct label per person — a real name when the dialogue reveals \
          one, otherwise Speaker 1, Speaker 2, … used consistently for the \
          same voice throughout. When one entry clearly contains two \
-         people, split it into separate entries at the handover.\n\
+         people, split it into separate entries at the handover. The \
+         **You**/**Meeting** split itself comes from a very rough local \
+         heuristic (which microphone picked up more energy) — it can be \
+         wrong, especially near handovers, so weigh the conversation's own \
+         content and phrasing at least as heavily as the existing label \
+         when deciding who said what; don't treat it as ground truth.\n\
          - Keep the exact Markdown structure of entries: a `[mm:ss]` \
          timestamp, the bold speaker label, the `Original:` line, then a \
          blank line, then the translation line.\n\
@@ -100,9 +105,19 @@ fn cleanup_prompt(include_timestamps: bool, include_original: bool, context: &st
     p
 }
 
-const SUMMARY_PROMPT: &str = "You summarize a cleaned meeting transcript. Respond with JSON only. \
-     Do not invent facts; include owners and deadlines only when explicitly stated; \
-     mark uncertainty with [unclear].";
+fn summary_prompt(ui_language: &str) -> String {
+    let language_name = match ui_language {
+        "vi" => "Vietnamese",
+        _ => "English",
+    };
+    format!(
+        "You summarize a cleaned meeting transcript. Respond with JSON only. \
+         Do not invent facts; include owners and deadlines only when explicitly \
+         stated; mark uncertainty with [unclear]. Write every field's text \
+         (summary, decisions, action items, open questions) in {language_name}, \
+         regardless of what language the transcript itself is in."
+    )
+}
 
 pub struct CleanupClient {
     http: reqwest::Client,
@@ -181,9 +196,9 @@ impl CleanupClient {
         Self::extract_text(&value)
     }
 
-    pub async fn summarize(&self, cleaned: &str) -> Result<MeetingSummary> {
+    pub async fn summarize(&self, cleaned: &str, ui_language: &str) -> Result<MeetingSummary> {
         let body = json!({
-            "systemInstruction": { "parts": [{ "text": SUMMARY_PROMPT }] },
+            "systemInstruction": { "parts": [{ "text": summary_prompt(ui_language) }] },
             "contents": [{ "role": "user", "parts": [{ "text": cleaned }] }],
             "generationConfig": {
                 "responseMimeType": "application/json",
@@ -216,22 +231,75 @@ impl CleanupClient {
     }
 }
 
+struct Headers {
+    meeting_notes: &'static str,
+    summary: &'static str,
+    key_decisions: &'static str,
+    action_items: &'static str,
+    open_questions: &'static str,
+    cleaned_transcript: &'static str,
+    none_recorded: &'static str,
+    due: &'static str,
+}
+
+const HEADERS_EN: Headers = Headers {
+    meeting_notes: "Meeting Notes",
+    summary: "Summary",
+    key_decisions: "Key Decisions",
+    action_items: "Action Items",
+    open_questions: "Open Questions",
+    cleaned_transcript: "Cleaned Transcript",
+    none_recorded: "_None recorded._",
+    due: "due",
+};
+
+const HEADERS_VI: Headers = Headers {
+    meeting_notes: "Ghi chú cuộc họp",
+    summary: "Tóm tắt",
+    key_decisions: "Quyết định chính",
+    action_items: "Việc cần làm",
+    open_questions: "Câu hỏi còn bỏ ngỏ",
+    cleaned_transcript: "Bản ghi đã dọn",
+    none_recorded: "_Không có._",
+    due: "hạn",
+};
+
+fn headers_for(ui_language: &str) -> &'static Headers {
+    match ui_language {
+        "vi" => &HEADERS_VI,
+        _ => &HEADERS_EN,
+    }
+}
+
 /// Render the polished Markdown (design §9: summary, decisions, action
-/// items, open questions, cleaned transcript).
-pub fn render_polished(title: &str, summary: &MeetingSummary, cleaned: &str) -> String {
-    let mut out = format!("# {title} — Meeting Notes\n\n## Summary\n\n{}\n\n", summary.summary);
-    out.push_str("## Key Decisions\n\n");
+/// items, open questions, cleaned transcript). Section headers follow
+/// `ui_language`; the model is separately instructed (`summary_prompt`) to
+/// write the summary content itself in that language.
+pub fn render_polished(
+    title: &str,
+    summary: &MeetingSummary,
+    cleaned: &str,
+    ui_language: &str,
+) -> String {
+    let h = headers_for(ui_language);
+    let mut out = format!(
+        "# {title} — {}\n\n## {}\n\n{}\n\n",
+        h.meeting_notes, h.summary, summary.summary
+    );
+    out.push_str(&format!("## {}\n\n", h.key_decisions));
     if summary.decisions.is_empty() {
-        out.push_str("_None recorded._\n\n");
+        out.push_str(h.none_recorded);
+        out.push_str("\n\n");
     } else {
         for d in &summary.decisions {
             out.push_str(&format!("- {d}\n"));
         }
         out.push('\n');
     }
-    out.push_str("## Action Items\n\n");
+    out.push_str(&format!("## {}\n\n", h.action_items));
     if summary.action_items.is_empty() {
-        out.push_str("_None recorded._\n\n");
+        out.push_str(h.none_recorded);
+        out.push_str("\n\n");
     } else {
         for a in &summary.action_items {
             let mut line = format!("- {}", a.item);
@@ -239,23 +307,24 @@ pub fn render_polished(title: &str, summary: &MeetingSummary, cleaned: &str) -> 
                 line.push_str(&format!(" — {}", a.owner));
             }
             if !a.deadline.is_empty() {
-                line.push_str(&format!(" (due {})", a.deadline));
+                line.push_str(&format!(" ({} {})", h.due, a.deadline));
             }
             out.push_str(&line);
             out.push('\n');
         }
         out.push('\n');
     }
-    out.push_str("## Open Questions\n\n");
+    out.push_str(&format!("## {}\n\n", h.open_questions));
     if summary.open_questions.is_empty() {
-        out.push_str("_None recorded._\n\n");
+        out.push_str(h.none_recorded);
+        out.push_str("\n\n");
     } else {
         for q in &summary.open_questions {
             out.push_str(&format!("- {q}\n"));
         }
         out.push('\n');
     }
-    out.push_str("## Cleaned Transcript\n\n");
+    out.push_str(&format!("## {}\n\n", h.cleaned_transcript));
     out.push_str(cleaned);
     out.push('\n');
     out
@@ -298,7 +367,7 @@ mod tests {
             }],
             open_questions: vec![],
         };
-        let out = render_polished("Weekly", &summary, "cleaned text");
+        let out = render_polished("Weekly", &summary, "cleaned text", "en");
         assert!(out.contains("## Summary"));
         assert!(out.contains("Ship Friday"));
         assert!(out.contains("Prepare demo — Rey (due next Friday)"));

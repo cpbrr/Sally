@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { CornerTools } from "./CornerTools";
 import { IconDoc, IconRefresh } from "./Icons";
 import { useSally } from "../store";
 
@@ -151,6 +152,7 @@ export function SessionBar() {
             </button>
           </>
         )}
+        <CornerTools />
         <span className="spacer" />
         {error ? (
           <span className="error-text" title={error}>
