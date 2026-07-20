@@ -64,17 +64,34 @@ jobs:
         with:
           workspaces: src-tauri
       - run: npm ci
-      - run: npx tauri build --target aarch64-apple-darwin --bundles app,dmg
+      - run: npx tauri build --target aarch64-apple-darwin --bundles app
+      - name: Ad-hoc sign the app bundle
+        # No Developer ID certificate (design §12.2, still pending) — an
+        # ad-hoc signature has no trusted identity behind it, so Gatekeeper
+        # still flags the app as from an unidentified developer, but it's
+        # enough for TCC (Screen Recording / audio capture permission
+        # prompts) to work, and it avoids the harsher "app is damaged, move
+        # to trash" wording unsigned + quarantined apps get on newer macOS.
+        run: |
+          codesign --force --deep --sign - \
+            "src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sally.app"
+      - name: Build DMG
+        run: |
+          mkdir -p dmg-staging
+          cp -R "src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sally.app" dmg-staging/
+          ln -s /Applications dmg-staging/Applications
+          hdiutil create -volname Sally -srcfolder dmg-staging -ov -format UDZO \
+            "src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sally-macos-aarch64.dmg"
       - name: Checksums
         run: |
-          cd src-tauri/target/aarch64-apple-darwin/release/bundle/dmg
-          shasum -a 256 *.dmg > SHA256SUMS
+          cd src-tauri/target/aarch64-apple-darwin/release/bundle/macos
+          shasum -a 256 Sally-macos-aarch64.dmg > Sally-macos-aarch64.dmg.sha256
       - uses: actions/upload-artifact@v4
         with:
           name: sally-macos-aarch64
           path: |
-            src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
-            src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/SHA256SUMS
+            src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sally-macos-aarch64.dmg
+            src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sally-macos-aarch64.dmg.sha256
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -95,4 +112,4 @@ jobs:
             Sally-windows-x64-portable.zip
             Sally-windows-x64-portable.zip.sha256
             *.dmg
-            SHA256SUMS
+            *.dmg.sha256

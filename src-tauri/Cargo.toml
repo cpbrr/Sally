@@ -1,6 +1,6 @@
 [package]
 name = "sally"
-version = "0.11.1"
+version = "0.12.0"
 edition = "2021"
 description = "Floating live translation and transcription for meetings"
 license = "MIT"
@@ -35,6 +35,15 @@ ort = "=2.0.0-rc.12"
 # Native system-audio capture (no BlackHole). Swift bridge builds with the
 # Xcode toolchain present on macOS runners; not compiled on other targets.
 screencapturekit = "8"
+# Core Audio process taps (macOS 14.4+): the newer, entitlement-only path
+# that doesn't need Screen Recording permission. No high-level Rust wrapper
+# exists for this API yet, so coreaudio_tap.rs is hand-written FFI against
+# these raw generated bindings.
+objc2 = "0.6"
+objc2-core-audio = { version = "0.3", features = ["AudioHardware", "objc2", "objc2-foundation", "objc2-core-audio-types"] }
+objc2-core-audio-types = "0.3"
+objc2-core-foundation = "0.3"
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSObject", "NSString", "NSUUID"] }
 
 [target.'cfg(windows)'.dependencies]
 # Per-app audio capture: WASAPI process loopback + session enumeration.

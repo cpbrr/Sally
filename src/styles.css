@@ -311,10 +311,10 @@ select:focus, input:focus { outline: 1px solid var(--accent); }
 .session-bar .error-text {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: pre-wrap;
   text-align: right;
+  max-height: 140px;
+  overflow-y: auto;
 }
 
 .elapsed {
@@ -433,9 +433,9 @@ input[type="range"] {
 .session-bar .warn-text {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: pre-wrap;
+  max-height: 140px;
+  overflow-y: auto;
   text-align: right;
 }
 

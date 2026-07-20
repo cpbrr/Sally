@@ -153,18 +153,18 @@ export function SessionBar() {
         )}
         <span className="spacer" />
         {error ? (
-          <span className="error-text">{error}</span>
+          <span className="error-text" title={error}>
+            {error}
+          </span>
         ) : (status === "reconnecting" || status === "storage-error") &&
           statusDetail ? (
           <span className="error-text" title={statusDetail}>
-            {statusDetail.length > 60
-              ? statusDetail.slice(0, 60) + "…"
-              : statusDetail}
+            {statusDetail}
           </span>
         ) : (
           warning && (
             <span className="warn-text" title={warning}>
-              {warning.length > 60 ? warning.slice(0, 60) + "…" : warning}
+              {warning}
             </span>
           )
         )}
