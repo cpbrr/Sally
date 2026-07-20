@@ -434,7 +434,7 @@ async fn run_session(
                             .map(|p| p.original)
                             .unwrap_or_default();
                         let tail = gate.end_turn(&original);
-                        play(&mut player, &mut readout_enabled, &tail, config.readout_speed, readout_volume);
+                        play(&mut player, &mut readout_enabled, &tail, readout_volume);
                     }
                     finalize_entry(&app, &mut assembler, &mut store,
                                    &config, &mut sealed_entries);
@@ -556,7 +556,7 @@ async fn run_session(
                                 .map(|p| p.original)
                                 .unwrap_or_default();
                             let playable = gate.push_audio(samples, &original);
-                            play(&mut player, &mut readout_enabled, &playable, config.readout_speed, readout_volume);
+                            play(&mut player, &mut readout_enabled, &playable, readout_volume);
                         }
                     }
                     Some(LiveEvent::TurnComplete) => {
@@ -566,7 +566,7 @@ async fn run_session(
                                 .map(|p| p.original)
                                 .unwrap_or_default();
                             let tail = gate.end_turn(&original);
-                            play(&mut player, &mut readout_enabled, &tail, config.readout_speed, readout_volume);
+                            play(&mut player, &mut readout_enabled, &tail, readout_volume);
                         }
                         // Rotate instead of sealing immediately: the entry
                         // stays open one more turn so trailing translation
@@ -677,14 +677,13 @@ fn play(
     player: &mut Option<Player>,
     readout_enabled: &mut bool,
     samples: &[i16],
-    speed: f32,
     volume: f32,
 ) {
     if samples.is_empty() {
         return;
     }
     if player.is_none() {
-        match Player::new(speed, volume) {
+        match Player::new(volume) {
             Ok(p) => *player = Some(p),
             Err(e) => {
                 log::error!("readout unavailable: {e}");

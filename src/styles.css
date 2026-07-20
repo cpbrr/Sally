@@ -179,37 +179,46 @@ select:focus, input:focus { outline: 1px solid var(--accent); }
   font-style: italic;
 }
 
-.volume-wrap { position: relative; display: flex; }
-.volume-pop {
-  position: absolute;
-  top: 30px;
-  right: 0;
-  z-index: 40;
+/* YouTube-style: the slider track is collapsed to nothing and only grows
+   on hover/focus of the wrapper, sliding out from behind the button. */
+.volume-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.volume-slider-track {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
-  background: rgb(35, 39, 47);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  max-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: max-width 0.16s ease, opacity 0.12s ease;
 }
-.volume-pop .volume-value {
-  font-size: 11px;
-  color: var(--text-dim);
-  min-width: 32px;
-  text-align: right;
+.volume-wrap:hover .volume-slider-track,
+.volume-wrap:focus-within .volume-slider-track {
+  max-width: 130px;
+  opacity: 1;
 }
 .volume-slider {
   width: 90px;
   height: 3px;
   accent-color: var(--accent);
 }
-.text-size-btn { font-size: 12px; font-weight: 700; }
+.volume-value {
+  font-size: 11px;
+  color: var(--text-dim);
+  min-width: 32px;
+  text-align: right;
+}
+.text-size-btn { font-weight: 700; }
+.text-size-btn-small { font-size: 10px; }
+.text-size-btn-big { font-size: 15px; }
 .corner-tools {
   position: absolute;
   right: 10px;
   bottom: 46px;
-  z-index: 30;
+  z-index: 5;
   display: flex;
   gap: 4px;
   background: rgba(35, 39, 47, 0.85);

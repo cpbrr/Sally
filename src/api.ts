@@ -17,7 +17,6 @@ export interface RedactedConfig {
   capture_app: string;
   readout_enabled: boolean;
   save_audio: boolean;
-  readout_speed: number;
   readout_volume: number;
 }
 
@@ -40,7 +39,6 @@ export interface SettingsPayload {
   capture_app?: string;
   readout_enabled?: boolean;
   save_audio?: boolean;
-  readout_speed?: number;
   readout_volume?: number;
 }
 

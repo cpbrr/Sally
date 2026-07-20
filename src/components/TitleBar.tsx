@@ -28,7 +28,6 @@ export function TitleBar() {
     useSally();
   const [pinned, setPinned] = useState(config?.always_on_top ?? false);
   const [volume, setVolume] = useState(config?.readout_volume ?? 1);
-  const [showVolume, setShowVolume] = useState(false);
 
   useEffect(() => {
     setVolume(config?.readout_volume ?? 1);
@@ -88,29 +87,23 @@ export function TitleBar() {
         {config?.readout_enabled ? <IconSpeakerOn /> : <IconSpeakerOff />}
       </button>
       <div className="volume-wrap">
-        <button
-          className={`icon-btn ${showVolume ? "active" : ""}`}
-          title={dict.readoutVolume}
-          onClick={() => setShowVolume(!showVolume)}
-        >
+        <button className="icon-btn" title={dict.readoutVolume}>
           <IconVolume />
         </button>
-        {showVolume && (
-          <div className="volume-pop">
-            <input
-              className="volume-slider"
-              type="range"
-              min={0}
-              max={100}
-              value={Math.round(volume * 100)}
-              title={dict.readoutVolume}
-              onChange={(e) => dragVolume(Number(e.target.value) / 100)}
-              onPointerUp={() => commitVolume(volume)}
-              onKeyUp={() => commitVolume(volume)}
-            />
-            <span className="volume-value">{Math.round(volume * 100)}%</span>
-          </div>
-        )}
+        <div className="volume-slider-track">
+          <input
+            className="volume-slider"
+            type="range"
+            min={0}
+            max={100}
+            value={Math.round(volume * 100)}
+            title={dict.readoutVolume}
+            onChange={(e) => dragVolume(Number(e.target.value) / 100)}
+            onPointerUp={() => commitVolume(volume)}
+            onKeyUp={() => commitVolume(volume)}
+          />
+          <span className="volume-value">{Math.round(volume * 100)}%</span>
+        </div>
       </div>
       <button
         className={`icon-btn ${pinned ? "active" : ""}`}

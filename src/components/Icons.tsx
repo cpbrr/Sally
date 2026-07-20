@@ -75,8 +75,16 @@ export const IconPinOff = () => (
 
 export const IconGear = () => (
   <Base>
-    <circle cx={12} cy={12} r={3.2} />
-    <path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1" />
+    <circle cx={12} cy={12} r={7.3} />
+    <circle cx={12} cy={12} r={2.4} />
+    <line x1={19.3} y1={12} x2={21.6} y2={12} strokeWidth={3} />
+    <line x1={17.16} y1={17.16} x2={18.79} y2={18.79} strokeWidth={3} />
+    <line x1={12} y1={19.3} x2={12} y2={21.6} strokeWidth={3} />
+    <line x1={6.84} y1={17.16} x2={5.21} y2={18.79} strokeWidth={3} />
+    <line x1={4.7} y1={12} x2={2.4} y2={12} strokeWidth={3} />
+    <line x1={6.84} y1={6.84} x2={5.21} y2={5.21} strokeWidth={3} />
+    <line x1={12} y1={4.7} x2={12} y2={2.4} strokeWidth={3} />
+    <line x1={17.16} y1={6.84} x2={18.79} y2={5.21} strokeWidth={3} />
   </Base>
 );
 
