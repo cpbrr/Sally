@@ -11,12 +11,15 @@ import { useSally } from "../store";
 import { IconFolder } from "./Icons";
 
 export function SavedPopup() {
-  const { dict, setPhase } = useSally();
+  const { dict, setPhase, diarizeState } = useSally();
   return (
     <div className="overlay">
       <div className="sheet">
         <h2>{dict.savedTitle}</h2>
         <p>{dict.savedBody}</p>
+        {diarizeState === "running" && (
+          <p className="field-hint">{dict.diarizeRunning}</p>
+        )}
         <div className="row end">
           <button className="btn" onClick={() => setPhase("idle")}>
             {dict.close}
@@ -31,7 +34,7 @@ export function SavedPopup() {
 }
 
 export function ProcessingScreen() {
-  const { dict, review, setReview, setPhase } = useSally();
+  const { dict, review, setReview, setPhase, diarizeState } = useSally();
   const [meetings, setMeetings] = useState<MeetingFile[]>([]);
   const [meetingTitle, setMeetingTitle] = useState("");
   const [names, setNames] = useState<Record<string, string>>({});
@@ -59,6 +62,18 @@ export function ProcessingScreen() {
     el.currentTime = ms / 1000;
     el.play().catch(() => {});
   };
+
+  // Background speaker identification finished: reload the meeting so the
+  // new "Speaker N" labels appear — but never over the user's typed
+  // renames or a finished processing run.
+  useEffect(() => {
+    if (diarizeState !== "done" || !review || resultPath !== null) return;
+    const untouched = Object.entries(names).every(([o, n]) => n === o);
+    if (untouched) {
+      selectMeeting(review.raw_path);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [diarizeState]);
 
   // Load the meeting list; open the newest when nothing is selected yet.
   useEffect(() => {
@@ -201,6 +216,12 @@ export function ProcessingScreen() {
               />
             </label>
 
+            {diarizeState === "running" && (
+              <p className="field-hint">{dict.diarizeRunning}</p>
+            )}
+            {diarizeState === "failed" && (
+              <p className="field-hint">{dict.diarizeFailed}</p>
+            )}
             {renameable.length > 0 && (
               <>
                 <h3>{dict.reviewSpeakers}</h3>

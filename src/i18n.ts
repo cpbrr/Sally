@@ -87,6 +87,9 @@ const en = {
   recordingTitle: "Recording",
   recordingHint:
     "Click a transcript line to jump the recording to that moment, or drag the player's seek bar.",
+  diarizeRunning: "Identifying speakers from the recording…",
+  diarizeFailed:
+    "Speaker identification failed — remote lines keep the \"Meeting\" label.",
   // recovery
   recoveryTitle: "Recover interrupted meeting?",
   recoveryBody:
@@ -205,6 +208,9 @@ const vi: typeof en = {
   recordingTitle: "Bản ghi âm",
   recordingHint:
     "Bấm vào một dòng bản ghi để nhảy đến thời điểm đó, hoặc kéo thanh tua của trình phát.",
+  diarizeRunning: "Đang nhận diện người nói từ bản ghi âm…",
+  diarizeFailed:
+    "Nhận diện người nói thất bại — các dòng từ xa giữ nhãn \"Meeting\".",
   recoveryTitle: "Khôi phục cuộc họp bị gián đoạn?",
   recoveryBody:
     "Sally tìm thấy một cuộc họp bị gián đoạn. Khôi phục bản ghi vào Markdown?",

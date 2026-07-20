@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   api,
+  onDiarize,
   onEntry,
   onPartial,
   onStatus,
@@ -79,6 +80,7 @@ export default function App() {
     addEntry,
     setPartial,
     setPaused,
+    setDiarizeState,
   } = useSally();
   const booted = useRef(false);
 
@@ -97,6 +99,7 @@ export default function App() {
       onEntry((e) => addEntry(e)),
       onPartial((p) => setPartial(p)),
       onWarning((w) => setWarning(w)),
+      onDiarize((p) => setDiarizeState(p.state)),
     ];
 
     api
