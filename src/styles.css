@@ -390,18 +390,6 @@ input[type="range"] {
   text-align: right;
 }
 
-.speaker-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.speaker-row .orig {
-  min-width: 90px;
-  color: var(--text-dim);
-  font-size: 12px;
-}
-.speaker-row input { flex: 1; }
-
 .setup-steps {
   color: var(--text-dim);
   font-size: 11px;

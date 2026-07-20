@@ -69,18 +69,35 @@ pub fn split_sections(raw: &str, budget: usize) -> Vec<String> {
     sections
 }
 
-fn cleanup_prompt(include_timestamps: bool) -> String {
-    format!(
+fn cleanup_prompt(include_timestamps: bool, context: &str) -> String {
+    let mut p = format!(
         "You clean up a raw meeting transcript section. Rules:\n\
          - Preserve the meaning of every passage exactly; never invent facts.\n\
          - Remove filler words, false starts, and repeated fragments.\n\
-         - Keep speaker names exactly as written (they are final).\n\
+         - Lines labeled **You** are the user and keep that label. Lines \
+         labeled **Meeting** are remote participants: work out from the \
+         conversation itself who is speaking and replace **Meeting** with a \
+         distinct label per person — a real name when the dialogue reveals \
+         one, otherwise Speaker 1, Speaker 2, … used consistently for the \
+         same voice throughout. When one entry clearly contains two \
+         people, split it into separate entries at the handover.\n\
+         - Keep the exact Markdown structure of entries: a `[mm:ss]` \
+         timestamp, the bold speaker label, the `Original:` line, and the \
+         translation line.\n\
          - Mark genuinely unclear passages with [unclear].\n\
          - Keep both the original text and its translation lines.\n\
          - {} timestamps.\n\
          Return only the cleaned Markdown, no commentary.",
         if include_timestamps { "Keep" } else { "Remove" }
-    )
+    );
+    if !context.is_empty() {
+        p.push_str(&format!(
+            "\n\nThe transcript is processed in sections. The previous \
+             section ended like this — reuse the same speaker labels for \
+             the same voices:\n{context}"
+        ));
+    }
+    p
 }
 
 const SUMMARY_PROMPT: &str = "You summarize a cleaned meeting transcript. Respond with JSON only. \
@@ -147,9 +164,16 @@ impl CleanupClient {
             .ok_or_else(|| SallyError::Gemini("cleanup response had no text".into()))
     }
 
-    pub async fn clean_section(&self, section: &str, include_timestamps: bool) -> Result<String> {
+    /// Clean one section. `context` carries the tail of the previous
+    /// cleaned section so speaker labels stay consistent across sections.
+    pub async fn clean_section(
+        &self,
+        section: &str,
+        include_timestamps: bool,
+        context: &str,
+    ) -> Result<String> {
         let body = json!({
-            "systemInstruction": { "parts": [{ "text": cleanup_prompt(include_timestamps) }] },
+            "systemInstruction": { "parts": [{ "text": cleanup_prompt(include_timestamps, context) }] },
             "contents": [{ "role": "user", "parts": [{ "text": section }] }]
         });
         let value = self.generate(body).await?;

@@ -92,10 +92,19 @@ impl Pipeline {
         }
     }
 
-    /// True when at least one source can fill a whole chunk. The other lane
-    /// is padded with silence so a silent mic never stalls system audio.
+    /// True when both sources can fill a whole chunk, or one source is a
+    /// full chunk ahead (the other lane is stalled or absent and gets
+    /// silence). Requiring both when both are flowing matters: emitting on
+    /// the first full lane used to consume the other lane short by a few
+    /// jittered samples and zero-pad the remainder, splicing silence into
+    /// the middle of continuous audio many times per second — audible as
+    /// choppy, glitchy recordings.
     pub fn chunk_ready(&self) -> bool {
-        self.mic.available() >= CHUNK_SAMPLES || self.system.available() >= CHUNK_SAMPLES
+        let mic = self.mic.available();
+        let system = self.system.available();
+        (mic >= CHUNK_SAMPLES && system >= CHUNK_SAMPLES)
+            || mic >= 2 * CHUNK_SAMPLES
+            || system >= 2 * CHUNK_SAMPLES
     }
 
     pub fn next_chunk(&mut self) -> Option<MixedChunk> {
@@ -163,12 +172,13 @@ mod tests {
     #[test]
     fn mixes_both_sources_and_pads_missing() {
         let mut p = Pipeline::new();
+        // A lane with no counterpart must be a full chunk ahead before the
+        // pipeline gives up on the other lane and pads it.
         p.push(frame(
             AudioSource::System,
-            vec![0.5; CHUNK_SAMPLES],
+            vec![0.5; CHUNK_SAMPLES * 2],
             TARGET_SAMPLE_RATE,
         ));
-        // No mic audio at all: still produces a chunk padded with silence.
         let chunk = p.next_chunk().expect("chunk");
         assert_eq!(chunk.mixed.len(), CHUNK_SAMPLES);
         assert_eq!(chunk.mixed[0], f32_to_i16(0.5));
@@ -176,11 +186,35 @@ mod tests {
     }
 
     #[test]
-    fn mic_activity_detected() {
+    fn waits_for_lagging_lane_instead_of_padding() {
         let mut p = Pipeline::new();
         p.push(frame(
             AudioSource::Microphone,
             vec![0.3; CHUNK_SAMPLES],
+            TARGET_SAMPLE_RATE,
+        ));
+        // System lane is 10 samples short (delivery jitter): must wait, not
+        // splice silence into the middle of continuous audio.
+        p.push(frame(
+            AudioSource::System,
+            vec![0.5; CHUNK_SAMPLES - 10],
+            TARGET_SAMPLE_RATE,
+        ));
+        assert!(!p.chunk_ready(), "must wait for the lagging lane");
+        p.push(frame(AudioSource::System, vec![0.5; 10], TARGET_SAMPLE_RATE));
+        let chunk = p.next_chunk().expect("chunk");
+        assert!(
+            chunk.system.iter().all(|&s| s != 0.0),
+            "no silence spliced into the system lane"
+        );
+    }
+
+    #[test]
+    fn mic_activity_detected() {
+        let mut p = Pipeline::new();
+        p.push(frame(
+            AudioSource::Microphone,
+            vec![0.3; CHUNK_SAMPLES * 2],
             TARGET_SAMPLE_RATE,
         ));
         let chunk = p.next_chunk().expect("chunk");
@@ -192,7 +226,7 @@ mod tests {
         let mut p = Pipeline::new();
         p.push(frame(
             AudioSource::System,
-            vec![0.1; CHUNK_SAMPLES * 3],
+            vec![0.1; CHUNK_SAMPLES * 4],
             TARGET_SAMPLE_RATE,
         ));
         assert_eq!(p.next_chunk().unwrap().seq, 0);

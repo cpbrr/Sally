@@ -65,15 +65,12 @@ const en = {
   processingTitle: "Process transcript",
   processLastMeeting: "Process last meeting",
   openRawFolder: "Open raw folder",
-  reviewSpeakers: "Speakers",
-  reviewSpeakersHint:
-    "Rename speakers, or give two labels the same name to merge them.",
   includeTimestamps: "Include timestamps",
   includeTimestampsHint:
-    "Applies to everything this run produces. Untick to also write a timestamp-free copy of the raw transcript. Run twice for both versions.",
+    "Applies to everything this run produces. Untick to also write a timestamp-free copy of the raw transcript.",
   aiCleanup: "AI clean & summarize",
   aiCleanupHint:
-    "Sends the transcript text to Gemini and writes a polished summary file.",
+    "Sends the transcript text to Gemini for a polished summary file — it also works out who is speaking and labels remote lines per person.",
   meetingPick: "Meeting",
   advanced: "Advanced",
   runProcessing: "Process",
@@ -87,9 +84,6 @@ const en = {
   recordingTitle: "Recording",
   recordingHint:
     "Click a transcript line to jump the recording to that moment, or drag the player's seek bar.",
-  diarizeRunning: "Identifying speakers from the recording…",
-  diarizeFailed:
-    "Speaker identification failed — remote lines keep the \"Meeting\" label.",
   // recovery
   recoveryTitle: "Recover interrupted meeting?",
   recoveryBody:
@@ -186,15 +180,12 @@ const vi: typeof en = {
   processingTitle: "Xử lý bản ghi",
   processLastMeeting: "Xử lý cuộc họp vừa rồi",
   openRawFolder: "Mở thư mục bản thô",
-  reviewSpeakers: "Người nói",
-  reviewSpeakersHint:
-    "Đổi tên người nói, hoặc đặt hai nhãn trùng tên để gộp lại.",
   includeTimestamps: "Kèm dấu thời gian",
   includeTimestampsHint:
-    "Áp dụng cho mọi tệp tạo ra trong lần chạy này. Bỏ chọn để tạo thêm bản sao không dấu thời gian của bản ghi thô. Chạy hai lần nếu muốn cả hai phiên bản.",
+    "Áp dụng cho mọi tệp tạo ra trong lần chạy này. Bỏ chọn để tạo thêm bản sao không dấu thời gian của bản ghi thô.",
   aiCleanup: "AI dọn & tóm tắt",
   aiCleanupHint:
-    "Gửi văn bản bản ghi đến Gemini và tạo tệp tóm tắt đã chỉnh sửa.",
+    "Gửi văn bản bản ghi đến Gemini để tạo tệp tóm tắt đã chỉnh sửa — đồng thời tự nhận diện và gắn nhãn từng người nói ở xa.",
   meetingPick: "Cuộc họp",
   advanced: "Nâng cao",
   runProcessing: "Xử lý",
@@ -208,9 +199,6 @@ const vi: typeof en = {
   recordingTitle: "Bản ghi âm",
   recordingHint:
     "Bấm vào một dòng bản ghi để nhảy đến thời điểm đó, hoặc kéo thanh tua của trình phát.",
-  diarizeRunning: "Đang nhận diện người nói từ bản ghi âm…",
-  diarizeFailed:
-    "Nhận diện người nói thất bại — các dòng từ xa giữ nhãn \"Meeting\".",
   recoveryTitle: "Khôi phục cuộc họp bị gián đoạn?",
   recoveryBody:
     "Sally tìm thấy một cuộc họp bị gián đoạn. Khôi phục bản ghi vào Markdown?",

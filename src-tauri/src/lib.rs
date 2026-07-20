@@ -1,9 +1,7 @@
 pub mod audio;
 pub mod commands;
 pub mod config;
-pub mod diarize;
 pub mod error;
-pub mod fbank;
 pub mod gemini;
 pub mod lang;
 pub mod readout;
@@ -30,6 +28,14 @@ pub fn run() {
                 if let Some(data_dir) = config::read_data_dir_pointer(&dir) {
                     match config::AppConfig::load(data_dir) {
                         Ok(cfg) => {
+                            // Garbage-collect the local-diarization embedding
+                            // model (feature removed in v0.9.0; Gemini cleanup
+                            // handles speaker attribution now).
+                            let stale = split::models_dir(&cfg.data_dir)
+                                .join("speaker_embedding_campp.onnx");
+                            if stale.exists() {
+                                let _ = std::fs::remove_file(stale);
+                            }
                             // No contention at setup time; try_lock is safe on
                             // any thread (blocking_lock panics inside tokio).
                             if let Ok(mut guard) = state.config.try_lock() {
