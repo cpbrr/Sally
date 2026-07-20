@@ -47,8 +47,10 @@ jobs:
 
   macos:
     # Windows is the current focus; build macOS only on manual dispatch.
+    # macos-15: the screencapturekit crate's apple-metal Swift bridge
+    # needs the Xcode 16 SDK (MTLLogState et al.).
     if: github.event_name == 'workflow_dispatch'
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
