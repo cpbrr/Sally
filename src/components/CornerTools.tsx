@@ -1,6 +1,6 @@
-// Bottom-right floating controls over the panels: transcript text size
-// and window-translucency toggle. Kept out of the title bar so the top
-// row stays capture/session-focused.
+// Text-size and window-translucency controls. Rendered inline in the
+// session bar's footer (not floating over the transcript, which used to
+// cover text near the bottom of the panel).
 
 import { useEffect, useState } from "react";
 import { IconContrast } from "./Icons";
@@ -8,7 +8,7 @@ import { useSally } from "../store";
 import { isTranslucent, setTranslucent } from "../transparency";
 
 const TEXT_SCALE_MIN = 0.85;
-const TEXT_SCALE_MAX = 1.4;
+const TEXT_SCALE_MAX = 2.0;
 const TEXT_SCALE_STEP = 0.1;
 
 export function CornerTools() {

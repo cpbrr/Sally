@@ -72,6 +72,7 @@ pub struct SettingsPayload {
     pub mic_device: Option<String>,
     pub system_device: Option<String>,
     pub capture_app: Option<String>,
+    pub mac_capture_method: Option<String>,
     pub readout_enabled: Option<bool>,
     pub save_audio: Option<bool>,
 }
@@ -129,6 +130,9 @@ pub async fn save_settings(
     if let Some(v) = payload.capture_app {
         cfg.capture_app = v;
     }
+    if let Some(v) = payload.mac_capture_method {
+        cfg.mac_capture_method = v;
+    }
     if let Some(v) = payload.readout_enabled {
         cfg.readout_enabled = v;
     }
@@ -164,7 +168,9 @@ pub struct AudioDevices {
 }
 
 /// Applications currently playing audio, for the per-app capture picker.
-/// Windows only; empty elsewhere.
+/// Windows: any app with an active audio session. macOS: apps
+/// ScreenCaptureKit can see (needs Screen Recording permission; empty, not
+/// an error, until it's granted). Empty on other platforms.
 #[tauri::command]
 pub async fn list_audio_apps() -> Result<Vec<String>> {
     #[cfg(windows)]
@@ -178,7 +184,13 @@ pub async fn list_audio_apps() -> Result<Vec<String>> {
         .await
         .map_err(|e| SallyError::Audio(e.to_string()))
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        tokio::task::spawn_blocking(crate::audio::sck_capture::list_audio_apps)
+            .await
+            .map_err(|e| SallyError::Audio(e.to_string()))
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     Ok(Vec::new())
 }
 
@@ -518,9 +530,12 @@ pub async fn clean_and_summarize(
     // The meeting name gives the summary its context (the user typed it in
     // review; the raw file's heading carries it after rename).
     let summary = client
-        .summarize(&format!("Meeting title: {title}\n\n{cleaned}"))
+        .summarize(
+            &format!("Meeting title: {title}\n\n{cleaned}"),
+            &cfg.ui_language,
+        )
         .await?;
-    let polished = render_polished(&title, &summary, &cleaned);
+    let polished = render_polished(&title, &summary, &cleaned, &cfg.ui_language);
 
     // Publish atomically only after all stages succeeded (design §9).
     let tmp = polished_path.with_extension("md.tmp");

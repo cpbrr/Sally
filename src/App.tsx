@@ -6,7 +6,6 @@ import {
   onStatus,
   onWarning,
 } from "./api";
-import { CornerTools } from "./components/CornerTools";
 import { Panels } from "./components/Panels";
 import { ProcessingScreen, SavedPopup } from "./components/Processing";
 import { SessionBar } from "./components/SessionBar";
@@ -123,7 +122,6 @@ export default function App() {
       ) : (
         <>
           <Panels />
-          <CornerTools />
           <SessionBar />
         </>
       )}

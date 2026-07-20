@@ -6,6 +6,12 @@
 //! elimination the Windows per-app path provides. Requires the Screen
 //! Recording permission (macOS prompts on first use); when SCK cannot
 //! start, the caller falls back to the legacy loopback-device path.
+//!
+//! Also the only macOS path that supports capturing a single app's audio
+//! (`spawn_sck_capture`'s `capture_app` param) — the Core Audio tap path
+//! only knows how to tap everything, so `capture.rs` routes a per-app
+//! selection here even on 14.4+ where the tap would otherwise be tried
+//! first.
 
 #![cfg(target_os = "macos")]
 
@@ -68,13 +74,31 @@ impl SCStreamOutputTrait for AudioHandler {
     }
 }
 
-/// Capture the whole system's audio into `tx` until `stop` is set.
+/// Applications ScreenCaptureKit can see right now, for the per-app capture
+/// picker. Requires Screen Recording permission to populate; empty (not an
+/// error) when it isn't granted yet, matching the Windows picker's shape.
+pub fn list_audio_apps() -> Vec<String> {
+    let Ok(content) = SCShareableContent::get() else {
+        return Vec::new();
+    };
+    content
+        .applications()
+        .into_iter()
+        .map(|a| a.application_name())
+        .filter(|n| !n.is_empty())
+        .collect()
+}
+
+/// Capture system audio into `tx` until `stop` is set. `capture_app`, when
+/// non-empty, scopes the filter to that one application's audio (matched by
+/// display name against `list_audio_apps`) instead of the whole display.
 /// Fails cleanly (for the loopback fallback) when Screen Recording
 /// permission is missing or SCK is unavailable.
 pub fn spawn_sck_capture(
     session_start: Instant,
     tx: mpsc::Sender<RawFrame>,
     stop: Arc<AtomicBool>,
+    capture_app: String,
 ) -> Result<std::thread::JoinHandle<()>> {
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<()>>();
     let handle = std::thread::spawn(move || {
@@ -90,10 +114,25 @@ pub fn spawn_sck_capture(
                 .into_iter()
                 .next()
                 .ok_or_else(|| "no display found".to_string())?;
-            let filter = SCContentFilter::create()
-                .with_display(&display)
-                .with_excluding_windows(&[])
-                .build();
+            let filter = if capture_app.is_empty() {
+                SCContentFilter::create()
+                    .with_display(&display)
+                    .with_excluding_windows(&[])
+                    .build()
+            } else {
+                let app = content
+                    .applications()
+                    .into_iter()
+                    .find(|a| a.application_name() == capture_app)
+                    .ok_or_else(|| {
+                        format!("'{capture_app}' has no active audio session")
+                    })?;
+                SCContentFilter::create()
+                    .with_display(&display)
+                    .with_excluding_windows(&[])
+                    .with_including_applications(&[&app], &[])
+                    .build()
+            };
             // Video output is mandatory for an SCStream; keep it as small
             // and slow as the API allows and simply never register a
             // Screen handler.

@@ -15,6 +15,7 @@ export interface RedactedConfig {
   mic_device: string;
   system_device: string;
   capture_app: string;
+  mac_capture_method: string;
   readout_enabled: boolean;
   save_audio: boolean;
   readout_volume: number;
@@ -37,6 +38,7 @@ export interface SettingsPayload {
   mic_device?: string;
   system_device?: string;
   capture_app?: string;
+  mac_capture_method?: string;
   readout_enabled?: boolean;
   save_audio?: boolean;
   readout_volume?: number;
