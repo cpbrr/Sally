@@ -3,10 +3,15 @@
 //! Windows: microphone via default/selected input device, system audio via
 //! WASAPI loopback (an input stream opened on an output device).
 //!
-//! macOS: microphone works through cpal; system audio comes from
-//! ScreenCaptureKit (native, no virtual device — see `sck_capture.rs`),
-//! falling back to a loopback *input* device (BlackHole or similar) only
-//! when SCK cannot start (e.g. Screen Recording permission denied).
+//! macOS: microphone works through cpal; system audio tries native paths in
+//! order, falling back to a loopback *input* device (BlackHole or similar)
+//! only when none of them can start:
+//!   1. Core Audio process tap (`coreaudio_tap.rs`) on macOS 14.4+ — no
+//!      Screen Recording permission needed.
+//!   2. ScreenCaptureKit (`sck_capture.rs`) on macOS 13.0+ — needs Screen
+//!      Recording permission, tried on 14.4+ too in case the tap API is
+//!      unavailable for some other reason.
+//!   3. A user-selected loopback device (BlackHole or similar).
 
 use super::{AudioSource, RawFrame};
 use crate::error::{Result, SallyError};
@@ -171,24 +176,57 @@ fn spawn_system_thread(
     stop: Arc<AtomicBool>,
 ) -> Result<std::thread::JoinHandle<()>> {
     #[cfg(target_os = "macos")]
-    return spawn_capture_thread(move || {
-        let host = cpal::default_host();
-        // System audio arrives through a loopback input device (BlackHole
-        // or similar) that the user routes meeting audio into. Selected by
-        // name; with no selection, look for a BlackHole-style device.
-        let device = find_macos_loopback_device(&host, &device_name).ok_or_else(|| {
-            SallyError::Audio(
-                "system audio on macOS needs a loopback input device such as \
-                 BlackHole: install one, route meeting audio to it (Multi-Output \
-                 Device), and select it as the system audio device in Settings"
-                    .into(),
-            )
-        })?;
-        let config = device
-            .default_input_config()
-            .map_err(|e| SallyError::Audio(format!("loopback config: {e}")))?;
-        build_stream(&device, &config, AudioSource::System, session_start, tx)
-    }, stop);
+    {
+        let mut attempts: Vec<String> = Vec::new();
+        let prefer_tap = macos_version()
+            .map(|(major, minor)| major > 14 || (major == 14 && minor >= 4))
+            .unwrap_or(false);
+
+        if prefer_tap {
+            match super::coreaudio_tap::spawn_tap_capture(session_start, tx.clone(), stop.clone())
+            {
+                Ok(handle) => return Ok(handle),
+                Err(e) => {
+                    log::warn!("Core Audio process tap unavailable, trying ScreenCaptureKit: {e}");
+                    attempts.push(format!("Core Audio tap: {e}"));
+                }
+            }
+        }
+
+        match super::sck_capture::spawn_sck_capture(session_start, tx.clone(), stop.clone()) {
+            Ok(handle) => return Ok(handle),
+            Err(e) => {
+                log::warn!("ScreenCaptureKit unavailable, falling back to loopback device: {e}");
+                attempts.push(format!("ScreenCaptureKit: {e}"));
+            }
+        }
+
+        return spawn_capture_thread(
+            move || {
+                let host = cpal::default_host();
+                // System audio arrives through a loopback input device
+                // (BlackHole or similar) that the user routes meeting audio
+                // into. Selected by name; with no selection, look for a
+                // BlackHole-style device.
+                let device = find_macos_loopback_device(&host, &device_name).ok_or_else(|| {
+                    SallyError::Audio(format!(
+                        "no native system-audio capture worked, and no loopback \
+                         input device is selected either:\n{}\nInstall a loopback \
+                         driver such as BlackHole, route meeting audio to it (Multi-\
+                         Output Device), and select it as the system audio device in \
+                         Settings — or grant the permission the errors above are \
+                         asking for and restart the meeting.",
+                        attempts.join("\n")
+                    ))
+                })?;
+                let config = device
+                    .default_input_config()
+                    .map_err(|e| SallyError::Audio(format!("loopback config: {e}")))?;
+                build_stream(&device, &config, AudioSource::System, session_start, tx)
+            },
+            stop,
+        );
+    }
     #[cfg(not(target_os = "macos"))]
     spawn_capture_thread(move || {
         let host = cpal::default_host();
@@ -200,6 +238,22 @@ fn spawn_system_thread(
             .map_err(|e| SallyError::Audio(format!("loopback config: {e}")))?;
         build_stream(&device, &config, AudioSource::System, session_start, tx)
     }, stop)
+}
+
+/// `(major, minor)` from `sw_vers -productVersion`, best-effort. Used only
+/// to decide whether the Core Audio process-tap API (14.4+) is worth
+/// attempting before falling back to ScreenCaptureKit.
+#[cfg(target_os = "macos")]
+fn macos_version() -> Option<(u32, u32)> {
+    let out = std::process::Command::new("sw_vers")
+        .arg("-productVersion")
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut parts = text.trim().split('.');
+    let major: u32 = parts.next()?.parse().ok()?;
+    let minor: u32 = parts.next().unwrap_or("0").parse().unwrap_or(0);
+    Some((major, minor))
 }
 
 /// A named loopback input device, or any device whose name suggests a
