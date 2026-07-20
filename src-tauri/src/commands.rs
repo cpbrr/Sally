@@ -73,6 +73,8 @@ pub struct SettingsPayload {
     pub system_device: Option<String>,
     pub capture_app: Option<String>,
     pub readout_enabled: Option<bool>,
+    pub save_audio: Option<bool>,
+    pub readout_speed: Option<f32>,
 }
 
 /// Create or update configuration. Used by both first-run setup and the
@@ -130,6 +132,12 @@ pub async fn save_settings(
     }
     if let Some(v) = payload.readout_enabled {
         cfg.readout_enabled = v;
+    }
+    if let Some(v) = payload.save_audio {
+        cfg.save_audio = v;
+    }
+    if let Some(v) = payload.readout_speed {
+        cfg.readout_speed = v.clamp(0.5, 2.0);
     }
     cfg.save()?;
     write_data_dir_pointer(&app_config_dir(&app)?, &cfg.data_dir)?;
@@ -291,15 +299,33 @@ pub struct ReviewInfo {
     pub raw_dir: String,
     pub polished_dir: String,
     pub speakers: Vec<String>,
+    /// Local WAV recording for this meeting, when one exists on disk.
+    pub audio_path: Option<String>,
 }
 
 fn review_info(review: &ReviewData) -> ReviewInfo {
+    let audio = review.store.audio_path();
     ReviewInfo {
         raw_path: review.store.raw_path().to_string_lossy().into_owned(),
         raw_dir: review.store.raw_dir().to_string_lossy().into_owned(),
         polished_dir: review.store.polished_dir().to_string_lossy().into_owned(),
         speakers: review.speakers.clone(),
+        audio_path: audio
+            .exists()
+            .then(|| audio.to_string_lossy().into_owned()),
     }
+}
+
+/// Clickable transcript blocks (timestamp, speaker, original text) for the
+/// review audio player, parsed from the last opened meeting's raw file.
+#[tauri::command]
+pub async fn meeting_chunks(state: State<'_, AppState>) -> Result<Vec<crate::store::TranscriptChunk>> {
+    let guard = state.last_meeting.lock().await;
+    let review = guard
+        .as_ref()
+        .ok_or_else(|| SallyError::Session("no meeting open for review".into()))?;
+    let text = std::fs::read_to_string(review.store.raw_path())?;
+    Ok(crate::store::parse_transcript_chunks(&text))
 }
 
 /// End the meeting and enter review (design §6.4). The raw transcript is

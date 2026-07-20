@@ -33,6 +33,8 @@ export function Settings() {
     capture_app: config?.capture_app ?? "",
     live_model: config?.live_model ?? "",
     cleanup_model: config?.cleanup_model ?? "",
+    save_audio: config?.save_audio ?? true,
+    readout_speed: config?.readout_speed ?? 1.0,
   });
   const [error, setError] = useState("");
   const [translucent, setTranslucentState] = useState(isTranslucent());
@@ -157,6 +159,31 @@ export function Settings() {
               {dict.chooseFolder}
             </button>
           </div>
+        </label>
+
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={form.save_audio}
+            onChange={(e) => setForm({ ...form, save_audio: e.target.checked })}
+          />
+          {dict.saveAudio}
+        </label>
+        <p className="field-hint">{dict.saveAudioHint}</p>
+
+        <label>
+          {dict.readoutSpeed}
+          <select
+            value={String(form.readout_speed)}
+            onChange={(e) =>
+              setForm({ ...form, readout_speed: Number(e.target.value) })
+            }
+          >
+            <option value="1">1×</option>
+            <option value="1.25">1.25×</option>
+            <option value="1.5">1.5×</option>
+            <option value="2">2×</option>
+          </select>
         </label>
 
         <label className="check">

@@ -3,9 +3,10 @@
 // past meeting from the raw folder, rename it and its speakers, choose
 // timestamps, optionally AI-clean, then open the result.
 
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { openPath } from "@tauri-apps/plugin-opener";
-import { useEffect, useState } from "react";
-import { api, MeetingFile } from "../api";
+import { useEffect, useRef, useState } from "react";
+import { api, formatTimestamp, MeetingFile, TranscriptChunk } from "../api";
 import { useSally } from "../store";
 import { IconFolder } from "./Icons";
 
@@ -39,6 +40,25 @@ export function ProcessingScreen() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
   const [resultPath, setResultPath] = useState<string | null>(null);
+  const [chunks, setChunks] = useState<TranscriptChunk[]>([]);
+  const audioRef = useRef<HTMLAudioElement>(null);
+
+  // Clickable transcript blocks for the recording, refreshed whenever a
+  // meeting with a recording is (re)opened.
+  useEffect(() => {
+    if (review?.audio_path) {
+      api.meetingChunks().then(setChunks).catch(() => setChunks([]));
+    } else {
+      setChunks([]);
+    }
+  }, [review?.raw_path, review?.audio_path]);
+
+  const jumpTo = (ms: number) => {
+    const el = audioRef.current;
+    if (!el) return;
+    el.currentTime = ms / 1000;
+    el.play().catch(() => {});
+  };
 
   // Load the meeting list; open the newest when nothing is selected yet.
   useEffect(() => {
@@ -138,6 +158,37 @@ export function ProcessingScreen() {
           </select>
         </label>
 
+        {review?.audio_path && (
+          <div className="recording">
+            <h3>{dict.recordingTitle}</h3>
+            <audio
+              ref={audioRef}
+              controls
+              preload="metadata"
+              src={convertFileSrc(review.audio_path)}
+              style={{ width: "100%" }}
+            />
+            {chunks.length > 0 && (
+              <>
+                <p className="field-hint">{dict.recordingHint}</p>
+                <div className="chunk-list">
+                  {chunks.map((c, i) => (
+                    <button
+                      key={i}
+                      className="chunk-btn"
+                      onClick={() => jumpTo(c.start_ms)}
+                    >
+                      <span className="meta">{formatTimestamp(c.start_ms)}</span>
+                      <span className="speaker">{c.speaker}</span>
+                      <span className="chunk-text">{c.text}</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
         {review && resultPath === null && (
           <>
             <label>
@@ -209,6 +260,9 @@ export function ProcessingScreen() {
             <div className="row end">
               <button className="btn" onClick={() => setResultPath(null)}>
                 {dict.backToApp}
+              </button>
+              <button className="btn" onClick={() => setPhase("idle")}>
+                {dict.backToHome}
               </button>
               <button
                 className="btn primary"

@@ -2,7 +2,9 @@
 //!
 //! Appends finalized timeline entries to the raw Markdown file, keeps a
 //! recovery journal for incomplete state, and performs safe finalization,
-//! timestamp-free export, renaming, and crash recovery. Never stores audio.
+//! timestamp-free export, renaming, and crash recovery. The store itself
+//! writes text only; the optional meeting recording lives alongside it in
+//! `meetings/audio/` (written by the session's `WavRecorder`).
 
 use crate::error::{Result, SallyError};
 use crate::timeline::{format_timestamp, EntryKind, TimelineEntry};
@@ -35,6 +37,7 @@ pub struct RecoveryJournal {
 pub struct MeetingStore {
     raw_dir: PathBuf,
     polished_dir: PathBuf,
+    audio_dir: PathBuf,
     recovery_dir: PathBuf,
     raw_path: PathBuf,
     /// Date-time filename prefix, `DD-MM-YYYY_HH.MM` (24-hour; `.` instead
@@ -56,6 +59,7 @@ impl MeetingStore {
     ) -> Result<Self> {
         let raw_dir = meetings_dir.join("raw");
         let polished_dir = meetings_dir.join("polished");
+        let audio_dir = meetings_dir.join("audio");
         std::fs::create_dir_all(&raw_dir)?;
         std::fs::create_dir_all(&polished_dir)?;
         std::fs::create_dir_all(&recovery_dir)?;
@@ -78,6 +82,7 @@ impl MeetingStore {
         Ok(Self {
             raw_dir,
             polished_dir,
+            audio_dir,
             recovery_dir,
             raw_path,
             prefix,
@@ -108,6 +113,7 @@ impl MeetingStore {
         Ok(Self {
             raw_dir: meetings_dir.join("raw"),
             polished_dir: meetings_dir.join("polished"),
+            audio_dir: meetings_dir.join("audio"),
             recovery_dir,
             raw_path,
             prefix,
@@ -158,6 +164,11 @@ impl MeetingStore {
 
     pub fn export_path(&self) -> PathBuf {
         self.raw_dir.join(format!("{}-no-timestamps.md", self.stem))
+    }
+
+    /// Where this meeting's recording lives (whether or not it exists).
+    pub fn audio_path(&self) -> PathBuf {
+        self.audio_dir.join(format!("{}.wav", self.stem))
     }
 
     fn journal_path(&self) -> PathBuf {
@@ -242,6 +253,11 @@ impl MeetingStore {
                 self.polished_dir.clone(),
                 format!("{}.md", self.stem),
                 format!("{new_stem}.md"),
+            ),
+            (
+                self.audio_dir.clone(),
+                format!("{}.wav", self.stem),
+                format!("{new_stem}.wav"),
             ),
         ];
         for (dir, old_name, new_name) in moves {
@@ -344,6 +360,72 @@ pub fn render_entry(entry: &TimelineEntry, target_language: &str) -> String {
             }
             block
         }
+    }
+}
+
+/// One clickable transcript block for the review audio player: where it
+/// starts on the session clock, who spoke, and what the original text was.
+#[derive(Debug, Clone, Serialize)]
+pub struct TranscriptChunk {
+    pub start_ms: u64,
+    pub speaker: String,
+    pub text: String,
+}
+
+/// Parse `[mm:ss] **Speaker**` headers (and their `Original:` line) out of a
+/// raw meeting Markdown file. Gap entries have no bold speaker and are
+/// skipped.
+pub fn parse_transcript_chunks(markdown: &str) -> Vec<TranscriptChunk> {
+    let mut chunks = Vec::new();
+    let mut lines = markdown.lines().peekable();
+    while let Some(line) = lines.next() {
+        let Some(rest) = line.strip_prefix('[') else {
+            continue;
+        };
+        let Some(close) = rest.find(']') else { continue };
+        let ts = &rest[..close];
+        if ts.is_empty() || !ts.chars().all(|c| c.is_ascii_digit() || c == ':') {
+            continue;
+        }
+        let Some(start_ms) = parse_timestamp_ms(ts) else {
+            continue;
+        };
+        let after = rest[close + 1..].trim();
+        let Some(bold) = after.strip_prefix("**") else {
+            continue; // gap entries carry no speaker
+        };
+        let Some(bold_end) = bold.find("**") else {
+            continue;
+        };
+        let speaker = bold[..bold_end].trim().to_string();
+        // The entry text is the next `Original:` line in the block.
+        let mut text = String::new();
+        while let Some(&next) = lines.peek() {
+            if next.starts_with('[') {
+                break; // next entry header; entry had no Original line
+            }
+            let consumed = lines.next().unwrap_or_default();
+            if let Some(t) = consumed.strip_prefix("Original: ") {
+                text = t.trim().to_string();
+                break;
+            }
+        }
+        chunks.push(TranscriptChunk {
+            start_ms,
+            speaker,
+            text,
+        });
+    }
+    chunks
+}
+
+/// `mm:ss` or `h:mm:ss` → milliseconds.
+fn parse_timestamp_ms(ts: &str) -> Option<u64> {
+    let parts: Vec<u64> = ts.split(':').map(|p| p.parse().ok()).collect::<Option<_>>()?;
+    match parts.as_slice() {
+        [m, s] => Some((m * 60 + s) * 1000),
+        [h, m, s] => Some((h * 3600 + m * 60 + s) * 1000),
+        _ => None,
     }
 }
 
@@ -541,11 +623,30 @@ mod tests {
         let mut store =
             MeetingStore::create(m.clone(), r, chrono::Local::now(), "Vietnamese").unwrap();
         std::fs::write(store.polished_path(), "polished").unwrap();
+        std::fs::create_dir_all(store.audio_path().parent().unwrap()).unwrap();
+        std::fs::write(store.audio_path(), "wav-bytes").unwrap();
         store.rename_meeting("Weekly Sync: Q3 planning!").unwrap();
         assert!(store.raw_path().exists());
         assert!(store.polished_path().exists());
+        assert!(store.audio_path().exists(), "recording follows the rename");
         let name = store.raw_path().file_name().unwrap().to_string_lossy().to_string();
         assert!(name.contains("Weekly-Sync"), "{name}");
         assert!(!name.contains(':'));
+    }
+
+    #[test]
+    fn parses_transcript_chunks_with_timestamps_and_speakers() {
+        let md = "# Meeting\n\n- Started: x\n\n---\n\n\
+                  [00:18] **You**\n\nOriginal: hello there\n\nVietnamese: xin chào\n\n\
+                  [01:00] — [01:15] *(transcription unavailable for this interval)*\n\n\
+                  [1:02:03] **Meeting**\n\nOriginal: long meeting words\n\n";
+        let chunks = parse_transcript_chunks(md);
+        assert_eq!(chunks.len(), 2, "gap entries are skipped");
+        assert_eq!(chunks[0].start_ms, 18_000);
+        assert_eq!(chunks[0].speaker, "You");
+        assert_eq!(chunks[0].text, "hello there");
+        assert_eq!(chunks[1].start_ms, 3_723_000);
+        assert_eq!(chunks[1].speaker, "Meeting");
+        assert_eq!(chunks[1].text, "long meeting words");
     }
 }

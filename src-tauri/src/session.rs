@@ -5,7 +5,7 @@
 //! UI through Tauri events and with commands through a control channel. The
 //! session clock is a monotonic `Instant` (design §5).
 
-use crate::audio::{capture, pipeline::Pipeline, playback::Player, RawFrame};
+use crate::audio::{capture, pipeline::Pipeline, playback::Player, recorder::WavRecorder, RawFrame};
 use crate::config::AppConfig;
 use crate::error::{Result, SallyError};
 use crate::gemini::live::{self, LiveEvent};
@@ -35,6 +35,10 @@ const TURN_IDLE_FLUSH_MS: u64 = 7_000;
 /// A speaker-change boundary only splits an entry that already carries this
 /// much original text; anything shorter reads fine on one line.
 const MIN_SPLIT_CHARS: usize = 12;
+/// A turn open this long without a speaker-change or model turn-complete
+/// boundary is split anyway, so one uninterrupted speaker never accumulates
+/// an unreadably long block ("split every minute").
+const MAX_TURN_DURATION_MS: u64 = 60_000;
 
 pub enum Control {
     Pause,
@@ -199,6 +203,30 @@ async fn run_session(
     // played translation coming back through loopback, and are dropped.
     let mut last_playback_at: Option<Instant> = None;
 
+    // Optional local recording: mixed 16 kHz chunks streamed to a WAV whose
+    // positions line up with transcript timestamps. A recorder failure
+    // degrades to "no recording" with a warning — it never ends the meeting.
+    let mut recorder: Option<WavRecorder> = if config.save_audio {
+        match WavRecorder::create(&store.audio_path()) {
+            Ok(r) => Some(r),
+            Err(e) => {
+                log::error!("meeting recording unavailable: {e}");
+                let _ = app.emit(
+                    "sally://warning",
+                    format!("Meeting recording unavailable: {e}"),
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Language of the currently open entry's original text, for splitting
+    // when the spoken language changes mid-stream. Only script-detectable
+    // languages participate (Latin-only text stays None and never splits).
+    let mut open_lang: Option<&'static str> = None;
+
     // Speaker-change splitting: the detector arrives asynchronously once
     // the model is ensured (first run downloads ~6 MB). The meeting never
     // waits for it; until it lands, entries just split on turns alone.
@@ -297,6 +325,7 @@ async fn run_session(
                                 emit_sealed(&app, sealed, &mut store, &config,
                                             &mut speakers, &mut sealed_entries);
                             }
+                            open_lang = None;
                             emit_partial(&app, &assembler);
                         }
                     }
@@ -347,6 +376,17 @@ async fn run_session(
                     if readout_playing {
                         last_playback_at = Some(Instant::now());
                     }
+                    let record_err = recorder
+                        .as_mut()
+                        .and_then(|rec| rec.write(chunk.t_ms, &chunk.mixed).err());
+                    if let Some(e) = record_err {
+                        log::error!("meeting recording stopped: {e}");
+                        let _ = app.emit(
+                            "sally://warning",
+                            format!("Meeting recording stopped: {e}"),
+                        );
+                        recorder = None;
+                    }
                     assembler.push_activity(chunk.mic_active, chunk.system_active, chunk.t_ms);
                     if let Some(d) = split_det.as_ref() {
                         // Readout playback is our own translated voice in
@@ -378,11 +418,28 @@ async fn run_session(
                             .map(|p| p.original)
                             .unwrap_or_default();
                         let tail = gate.end_turn(&original);
-                        play(&mut player, &mut readout_enabled, &tail);
+                        play(&mut player, &mut readout_enabled, &tail, config.readout_speed);
                     }
                     finalize_entry(&app, &mut assembler, &mut store,
                                    &config, &mut speakers, &mut sealed_entries);
+                    open_lang = None;
                     last_fragment_ms = 0;
+                } else if !paused
+                    && assembler.open_original_len() >= MIN_SPLIT_CHARS
+                    && assembler
+                        .open_start_ms()
+                        .map(|start| last_chunk_ms.saturating_sub(start) >= MAX_TURN_DURATION_MS)
+                        .unwrap_or(false)
+                {
+                    // Long uninterrupted turn: split on a time boundary the
+                    // same way a speaker-change boundary would, so trailing
+                    // translation can still land in the closing entry.
+                    if let Some(sealed) = assembler.rotate_turn() {
+                        emit_sealed(&app, sealed, &mut store, &config,
+                                    &mut speakers, &mut sealed_entries);
+                    }
+                    open_lang = None;
+                    emit_partial(&app, &assembler);
                 }
             }
 
@@ -414,12 +471,28 @@ async fn run_session(
                         let echo_window = last_playback_at
                             .map(|t| t.elapsed() < Duration::from_millis(4000))
                             .unwrap_or(false);
+                        let frag_lang = crate::lang::detect(&text);
                         if echo_window
-                            && crate::lang::detect(&text)
-                                .map(|l| l == target_code)
-                                .unwrap_or(false)
+                            && frag_lang.map(|l| l == target_code).unwrap_or(false)
                         {
                             continue;
+                        }
+                        // Language changed mid-stream (e.g. Japanese hand-off
+                        // to Vietnamese): split so each entry stays in one
+                        // language. Latin-generic text detects as None and
+                        // never triggers this.
+                        if let (Some(f), Some(o)) = (frag_lang, open_lang) {
+                            if f != o
+                                && assembler.open_original_len() >= MIN_SPLIT_CHARS
+                            {
+                                if let Some(sealed) = assembler.rotate_turn() {
+                                    emit_sealed(&app, sealed, &mut store, &config,
+                                                &mut speakers, &mut sealed_entries);
+                                }
+                            }
+                        }
+                        if frag_lang.is_some() {
+                            open_lang = frag_lang;
                         }
                         assembler.push_original(&text, last_chunk_ms);
                         last_fragment_ms = last_chunk_ms;
@@ -437,7 +510,7 @@ async fn run_session(
                                 .map(|p| p.original)
                                 .unwrap_or_default();
                             let playable = gate.push_audio(samples, &original);
-                            play(&mut player, &mut readout_enabled, &playable);
+                            play(&mut player, &mut readout_enabled, &playable, config.readout_speed);
                         }
                     }
                     Some(LiveEvent::TurnComplete) => {
@@ -447,7 +520,7 @@ async fn run_session(
                                 .map(|p| p.original)
                                 .unwrap_or_default();
                             let tail = gate.end_turn(&original);
-                            play(&mut player, &mut readout_enabled, &tail);
+                            play(&mut player, &mut readout_enabled, &tail, config.readout_speed);
                         }
                         // Rotate instead of sealing immediately: the entry
                         // stays open one more turn so trailing translation
@@ -456,6 +529,7 @@ async fn run_session(
                             emit_sealed(&app, sealed, &mut store, &config,
                                         &mut speakers, &mut sealed_entries);
                         }
+                        open_lang = None;
                         last_fragment_ms = 0;
                     }
                     other => {
@@ -537,6 +611,11 @@ async fn run_session(
     capture_handle.stop();
     finalize_entry(&app, &mut assembler, &mut store, &config,
                    &mut speakers, &mut sealed_entries);
+    if let Some(rec) = recorder.as_mut() {
+        if let Err(e) = rec.finalize() {
+            log::error!("recording finalize failed: {e}");
+        }
+    }
     drop(conn);
     if let Err(e) = store.finalize() {
         log::error!("finalize failed: {e}");
@@ -557,12 +636,12 @@ async fn run_session(
 
 /// Send gated samples to the output device, opening it lazily. If no output
 /// device exists, readout turns itself off instead of failing the session.
-fn play(player: &mut Option<Player>, readout_enabled: &mut bool, samples: &[i16]) {
+fn play(player: &mut Option<Player>, readout_enabled: &mut bool, samples: &[i16], speed: f32) {
     if samples.is_empty() {
         return;
     }
     if player.is_none() {
-        match Player::new() {
+        match Player::new(speed) {
             Ok(p) => *player = Some(p),
             Err(e) => {
                 log::error!("readout unavailable: {e}");

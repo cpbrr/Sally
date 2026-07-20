@@ -75,5 +75,8 @@ can be renamed or merged in the review screen after the meeting.
 Meeting audio goes to Google's Gemini service; optional cleanup sends
 transcript text. Free-tier API keys may allow Google to use content to
 improve its products — unsuitable for confidential meetings unless approved.
-Sally stores no audio, no analytics, and redacts the API key from logs. The
-`.env` in the Sally data folder holds the key in plain text by design.
+When "Save meeting audio" is on (the default), a WAV recording is kept in
+`meetings/audio/` on this device only and is never uploaded; turn it off in
+Settings to store no audio at all. Sally collects no analytics and redacts
+the API key from logs. The `.env` in the Sally data folder holds the key in
+plain text by design.

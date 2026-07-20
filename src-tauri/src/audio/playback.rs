@@ -37,7 +37,10 @@ pub struct Player {
 
 impl Player {
     /// Open the default output device. Fails cleanly when none exists.
-    pub fn new() -> Result<Self> {
+    /// `speed` (0.5–2.0, 1.0 = normal) plays the readout faster or slower
+    /// by treating the source as a higher/lower virtual sample rate — a
+    /// slight pitch shift comes with it, which is fine for speech.
+    pub fn new(speed: f32) -> Result<Self> {
         let queue: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::new()));
         let stop = Arc::new(AtomicBool::new(false));
 
@@ -86,9 +89,10 @@ impl Player {
             }
         }
 
+        let virtual_rate = (SOURCE_RATE as f32 * speed.clamp(0.5, 2.0)) as u32;
         Ok(Self {
             queue,
-            resampler: LinearResampler::new(SOURCE_RATE, device_rate),
+            resampler: LinearResampler::new(virtual_rate, device_rate),
             device_rate,
             stop,
             thread: Some(thread),
