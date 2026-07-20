@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import { IconDoc } from "./Icons";
+import { IconDoc, IconRefresh } from "./Icons";
 import { useSally } from "../store";
 
 function formatElapsed(ms: number): string {
@@ -33,11 +33,15 @@ export function SessionBar() {
     stopMeetingClock,
     resetMeeting,
     setStatus,
+    setConfig,
   } = useSally();
   const [now, setNow] = useState(Date.now());
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [pickingSource, setPickingSource] = useState(false);
+  const [audioApps, setAudioApps] = useState<string[]>([]);
+  const [sourceChoice, setSourceChoice] = useState("");
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 500);
@@ -51,10 +55,22 @@ export function SessionBar() {
     ? clockNow - meetingStartedAt - pausedAccumMs
     : 0;
 
-  const start = async () => {
+  const openSourcePicker = () => {
+    setError("");
+    setSourceChoice(config?.capture_app ?? "");
+    setPickingSource(true);
+    api.listAudioApps().then(setAudioApps).catch(() => {});
+  };
+
+  const confirmSourceAndStart = async () => {
+    setPickingSource(false);
     setError("");
     setBusy(true);
     try {
+      if (sourceChoice !== (config?.capture_app ?? "")) {
+        const updated = await api.saveSettings({ capture_app: sourceChoice });
+        setConfig(updated);
+      }
       resetMeeting();
       await api.startMeeting(config?.target_language);
       startMeetingClock();
@@ -110,7 +126,7 @@ export function SessionBar() {
         <span className="elapsed">{formatElapsed(Math.max(0, elapsed))}</span>
         {phase !== "live" ? (
           <>
-            <button className="btn primary" onClick={start} disabled={busy}>
+            <button className="btn primary" onClick={openSourcePicker} disabled={busy}>
               {dict.start}
             </button>
             <button
@@ -164,6 +180,50 @@ export function SessionBar() {
               </button>
               <button className="btn danger" onClick={end}>
                 {dict.endMeeting}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {pickingSource && (
+        <div className="overlay">
+          <div className="sheet">
+            <h2>{dict.captureSource}</h2>
+            <p className="field-hint">{dict.captureSourceHint}</p>
+            <div className="row">
+              <select
+                style={{ flex: 1 }}
+                value={sourceChoice}
+                onChange={(e) => setSourceChoice(e.target.value)}
+              >
+                <option value="">{dict.entireSystem}</option>
+                {sourceChoice && !audioApps.includes(sourceChoice) && (
+                  <option value={sourceChoice}>{sourceChoice}</option>
+                )}
+                {audioApps.map((a) => (
+                  <option key={a} value={a}>
+                    {a}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="btn compact"
+                title={dict.refresh}
+                onClick={() => api.listAudioApps().then(setAudioApps).catch(() => {})}
+              >
+                <IconRefresh />
+              </button>
+            </div>
+            <div className="row end">
+              <button className="btn" onClick={() => setPickingSource(false)}>
+                {dict.cancel}
+              </button>
+              <button
+                className="btn primary"
+                onClick={confirmSourceAndStart}
+                disabled={busy}
+              >
+                {dict.start}
               </button>
             </div>
           </div>

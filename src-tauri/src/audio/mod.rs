@@ -3,20 +3,26 @@
 //! The capture adapter produces timestamped frames from the microphone and
 //! from system audio. No Gemini or UI logic lives here. The pipeline
 //! resamples both sources to Gemini's mono 16 kHz PCM, mixes them, and keeps
-//! only bounded in-memory buffers — audio never touches disk.
+//! only bounded in-memory buffers. The optional recorder (Settings → "Save
+//! meeting audio") is the single place audio may touch disk, and only
+//! locally.
 
 #[cfg(windows)]
 pub mod app_capture;
 pub mod capture;
 pub mod pipeline;
 pub mod playback;
+pub mod recorder;
 
 use serde::Serialize;
 
 /// Target format required by the Gemini Live API input.
 pub const TARGET_SAMPLE_RATE: u32 = 16_000;
-/// Mixed frames are emitted in 100 ms chunks.
-pub const CHUNK_SAMPLES: usize = (TARGET_SAMPLE_RATE / 10) as usize;
+/// Mixed frames are emitted in 50 ms chunks: halves client-side buffering
+/// latency vs the old 100 ms without changing any downstream math (the
+/// split detector rings its own 10 s window and Gemini accepts any chunk
+/// size).
+pub const CHUNK_SAMPLES: usize = (TARGET_SAMPLE_RATE / 20) as usize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum AudioSource {
@@ -50,8 +56,7 @@ pub struct MixedChunk {
     pub mic_active: bool,
     /// True when system audio carried speech-level energy in this chunk.
     pub system_active: bool,
-    /// System-lane-only copy for the speaker-change detector. Stays in
-    /// memory like every other buffer here; audio never touches disk.
+    /// System-lane-only copy for the speaker-change detector.
     pub system: Vec<f32>,
 }
 

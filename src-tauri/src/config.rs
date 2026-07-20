@@ -24,6 +24,8 @@ const KEY_READOUT: &str = "SALLY_READOUT";
 const KEY_LIVE_API_VERSION: &str = "SALLY_LIVE_API_VERSION";
 const KEY_SPEAKER_SPLIT: &str = "SALLY_SPEAKER_SPLIT";
 const KEY_SEG_MODEL_URL: &str = "SALLY_SEGMENTATION_MODEL_URL";
+const KEY_SAVE_AUDIO: &str = "SALLY_SAVE_AUDIO";
+const KEY_READOUT_SPEED: &str = "SALLY_READOUT_SPEED";
 
 // The documented WebSocket endpoint for live translation is v1beta; the
 // session still auto-flips to v1alpha if setup keeps getting rejected.
@@ -56,6 +58,13 @@ pub struct AppConfig {
     pub speaker_split_enabled: bool,
     /// Override URL for the segmentation model download (air-gapped setups).
     pub segmentation_model_url: String,
+    /// Save the mixed meeting audio as a local WAV next to the transcript
+    /// so passages can be re-listened to during review. Local only; never
+    /// uploaded. On by default; SALLY_SAVE_AUDIO=off disables it.
+    pub save_audio: bool,
+    /// Playback speed for the translated-voice readout (1.0 = normal).
+    /// Clamped to 0.5–2.0.
+    pub readout_speed: f32,
 }
 
 impl AppConfig {
@@ -77,6 +86,8 @@ impl AppConfig {
             live_api_version: DEFAULT_LIVE_API_VERSION.into(),
             speaker_split_enabled: true,
             segmentation_model_url: String::new(),
+            save_audio: true,
+            readout_speed: 1.0,
         }
     }
 
@@ -137,6 +148,10 @@ impl AppConfig {
         }
         cfg.speaker_split_enabled = get(KEY_SPEAKER_SPLIT) != "off";
         cfg.segmentation_model_url = get(KEY_SEG_MODEL_URL);
+        cfg.save_audio = get(KEY_SAVE_AUDIO) != "off";
+        if let Ok(speed) = get(KEY_READOUT_SPEED).parse::<f32>() {
+            cfg.readout_speed = speed.clamp(0.5, 2.0);
+        }
         Ok(cfg)
     }
 
@@ -173,6 +188,11 @@ impl AppConfig {
             if self.speaker_split_enabled { "on" } else { "off" }.into(),
         );
         map.insert(KEY_SEG_MODEL_URL.into(), self.segmentation_model_url.clone());
+        map.insert(
+            KEY_SAVE_AUDIO.into(),
+            if self.save_audio { "on" } else { "off" }.into(),
+        );
+        map.insert(KEY_READOUT_SPEED.into(), format!("{}", self.readout_speed));
         let mut out = String::from(
             "# Sally configuration. The API key is stored in plain text by design;\n\
              # anyone who can read this folder can obtain it.\n",
@@ -201,6 +221,8 @@ impl AppConfig {
             system_device: self.system_device.clone(),
             capture_app: self.capture_app.clone(),
             readout_enabled: self.readout_enabled,
+            save_audio: self.save_audio,
+            readout_speed: self.readout_speed,
         }
     }
 }
@@ -218,6 +240,8 @@ pub struct RedactedConfig {
     pub system_device: String,
     pub capture_app: String,
     pub readout_enabled: bool,
+    pub save_audio: bool,
+    pub readout_speed: f32,
 }
 
 /// Remove every occurrence of the API key from a message before it can reach
@@ -304,5 +328,7 @@ mod tests {
         assert!(!cfg.always_on_top, "always-on-top must default off");
         assert!(!cfg.readout_enabled);
         assert_eq!(cfg.live_api_version, DEFAULT_LIVE_API_VERSION);
+        assert!(cfg.save_audio, "audio saving must default on");
+        assert_eq!(cfg.readout_speed, 1.0);
     }
 }

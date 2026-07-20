@@ -16,6 +16,8 @@ export interface RedactedConfig {
   system_device: string;
   capture_app: string;
   readout_enabled: boolean;
+  save_audio: boolean;
+  readout_speed: number;
 }
 
 export interface BootInfo {
@@ -36,6 +38,8 @@ export interface SettingsPayload {
   system_device?: string;
   capture_app?: string;
   readout_enabled?: boolean;
+  save_audio?: boolean;
+  readout_speed?: number;
 }
 
 export interface AudioDevices {
@@ -75,6 +79,13 @@ export interface ReviewInfo {
   raw_dir: string;
   polished_dir: string;
   speakers: string[];
+  audio_path: string | null;
+}
+
+export interface TranscriptChunk {
+  start_ms: number;
+  speaker: string;
+  text: string;
 }
 
 export const api = {
@@ -96,6 +107,7 @@ export const api = {
   listMeetings: () => invoke<MeetingFile[]>("list_meetings"),
   openMeeting: (rawPath: string) =>
     invoke<ReviewInfo>("open_meeting", { rawPath }),
+  meetingChunks: () => invoke<TranscriptChunk[]>("meeting_chunks"),
   applyReview: (renames: Record<string, string>, meetingTitle?: string) =>
     invoke<ReviewInfo>("apply_review", {
       renames,

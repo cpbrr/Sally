@@ -103,6 +103,12 @@ impl Assembler {
         self.open.as_ref().map(|e| e.original.chars().count()).unwrap_or(0)
     }
 
+    /// Start timestamp of the currently open entry, for duration-based
+    /// splitting of long uninterrupted turns.
+    pub fn open_start_ms(&self) -> Option<u64> {
+        self.open.as_ref().map(|e| e.start_ms)
+    }
+
     /// Whether the open entry is (so far) attributed to the microphone.
     /// Speaker-change boundaries from the system lane must not split the
     /// user's own turns.
@@ -141,8 +147,10 @@ impl Assembler {
     }
 
     pub fn partial(&self) -> Option<PartialEntry> {
-        // Live view: the still-open original plus whichever translation is
-        // currently streaming (which may belong to the closing entry).
+        // Live view: everything not yet sealed. The closing entry's frozen
+        // original must stay visible here — it leaves the panel only when
+        // its sealed entry arrives, never before (text used to vanish for
+        // the whole closing window after a turn rotation).
         let e = self.open.as_ref().or(self.closing.as_ref())?;
         let translated = self
             .closing
@@ -150,10 +158,26 @@ impl Assembler {
             .map(|c| c.translated.clone())
             .filter(|t| !t.is_empty())
             .unwrap_or_else(|| e.translated.clone());
+        let mut original = self
+            .closing
+            .as_ref()
+            .map(|c| c.original.clone())
+            .unwrap_or_default();
+        if let Some(o) = self.open.as_ref() {
+            if !original.is_empty() && !o.original.is_empty() {
+                original.push(' ');
+            }
+            original.push_str(&o.original);
+        }
+        let start_ms = self
+            .closing
+            .as_ref()
+            .map(|c| c.start_ms)
+            .unwrap_or(e.start_ms);
         Some(PartialEntry {
-            start_ms: e.start_ms,
+            start_ms,
             speaker: String::new(), // provisional: label assigned at finalize
-            original: self.open.as_ref().map(|o| o.original.clone()).unwrap_or_default(),
+            original,
             translated,
         })
     }
@@ -330,6 +354,22 @@ mod tests {
         }
         let e = a.finalize_turn().pop().expect("entry");
         assert_eq!(e.speaker, "Meeting");
+    }
+
+    #[test]
+    fn closing_text_stays_visible_in_partial_after_rotate() {
+        let mut a = Assembler::new();
+        a.push_original("long frozen passage", 1000);
+        assert!(a.rotate_turn().is_none());
+        // Nothing sealed yet: the frozen text must still be in the partial.
+        let p = a.partial().expect("partial");
+        assert_eq!(p.original, "long frozen passage");
+        assert_eq!(p.start_ms, 1000);
+        // New open text joins it until the closing entry seals.
+        a.push_original("new words", 3000);
+        let p = a.partial().expect("partial");
+        assert_eq!(p.original, "long frozen passage new words");
+        assert_eq!(p.start_ms, 1000);
     }
 
     #[test]

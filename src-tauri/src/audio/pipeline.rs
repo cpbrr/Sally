@@ -1,6 +1,7 @@
 //! Audio pipeline: per-source resampling to 16 kHz mono, bounded buffering,
-//! and mixing into 100 ms chunks for the Gemini Live client. Keeps a
-//! mic-activity flag for `You` labeling. Never writes audio to disk.
+//! and mixing into 50 ms chunks for the Gemini Live client. Keeps a
+//! mic-activity flag for `You` labeling. Never writes audio to disk itself
+//! (the optional recorder in `recorder.rs` does that downstream).
 
 use super::{
     downmix, f32_to_i16, AudioSource, LinearResampler, MixedChunk, RawFrame, CHUNK_SAMPLES,

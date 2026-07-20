@@ -184,6 +184,43 @@ select:focus, input:focus { outline: 1px solid var(--accent); }
   padding: 8px 0;
 }
 
+/* Review recording player: clickable transcript blocks that seek the audio. */
+.recording { margin: 10px 0; }
+.recording audio { margin: 6px 0; }
+.chunk-list {
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px;
+}
+.chunk-btn {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: inherit;
+  padding: 4px 6px;
+  cursor: pointer;
+  line-height: 1.4;
+  font: inherit;
+}
+.chunk-btn:hover { background: rgba(255, 255, 255, 0.06); }
+.chunk-btn .meta {
+  color: var(--text-dim);
+  font-size: 11px;
+  margin-right: 6px;
+}
+.chunk-btn .speaker {
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 11px;
+  margin-right: 6px;
+}
+.chunk-btn .chunk-text { font-size: 12px; }
+
 .jump-live {
   position: absolute;
   bottom: 8px;

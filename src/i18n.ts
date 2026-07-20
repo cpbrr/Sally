@@ -45,7 +45,7 @@ const en = {
   chooseFolder: "Choose folder…",
   setupPrivacyTitle: "Privacy disclosure",
   setupPrivacy:
-    "Meeting audio is sent to Google's Gemini service for transcription and translation. Optional cleanup sends transcript text to Google. With a free-tier API key, Google may use content to improve its products — free-tier keys may be unsuitable for confidential company meetings unless your company approved that use. Sally never stores audio recordings.",
+    "Meeting audio is sent to Google's Gemini service for transcription and translation. Optional cleanup sends transcript text to Google. With a free-tier API key, Google may use content to improve its products — free-tier keys may be unsuitable for confidential company meetings unless your company approved that use. When 'Save meeting audio' is on, a recording is kept only on this device and is never uploaded.",
   setupPrivacyAccept: "I understand and accept",
   setupPermissions: "Permissions",
   setupPermissionsHint:
@@ -81,8 +81,12 @@ const en = {
   processingSuccess: "Done! Files are ready.",
   openMarkdown: "Open Markdown",
   backToApp: "Back",
+  backToHome: "Back to Home",
   meetingName: "Meeting name",
   done: "Done",
+  recordingTitle: "Recording",
+  recordingHint:
+    "Click a transcript line to jump the recording to that moment, or drag the player's seek bar.",
   // recovery
   recoveryTitle: "Recover interrupted meeting?",
   recoveryBody:
@@ -101,6 +105,10 @@ const en = {
     "Pick the meeting app to capture only its audio. Sally's own read-aloud voice is then never captured, which removes echo. The app must be playing audio to appear in this list.",
   refresh: "Refresh",
   alwaysOnTopDefault: "Always on top by default",
+  saveAudio: "Save meeting audio",
+  saveAudioHint:
+    "Keeps a local WAV recording next to the transcript so you can re-listen during review. Stays on this device; never uploaded.",
+  readoutSpeed: "Readout speed",
   liveModel: "Live model",
   cleanupModel: "Cleanup model",
   save: "Save",
@@ -156,7 +164,7 @@ const vi: typeof en = {
   chooseFolder: "Chọn thư mục…",
   setupPrivacyTitle: "Thông báo quyền riêng tư",
   setupPrivacy:
-    "Âm thanh cuộc họp được gửi đến dịch vụ Gemini của Google để phiên âm và dịch. Bước dọn bản ghi (tùy chọn) gửi văn bản đến Google. Với khóa API miễn phí, Google có thể dùng nội dung để cải thiện sản phẩm — khóa miễn phí có thể không phù hợp cho các cuộc họp bảo mật trừ khi công ty bạn đã chấp thuận. Sally không bao giờ lưu bản ghi âm.",
+    "Âm thanh cuộc họp được gửi đến dịch vụ Gemini của Google để phiên âm và dịch. Bước dọn bản ghi (tùy chọn) gửi văn bản đến Google. Với khóa API miễn phí, Google có thể dùng nội dung để cải thiện sản phẩm — khóa miễn phí có thể không phù hợp cho các cuộc họp bảo mật trừ khi công ty bạn đã chấp thuận. Khi bật 'Lưu âm thanh cuộc họp', bản ghi âm chỉ được lưu trên máy này và không bao giờ được tải lên.",
   setupPrivacyAccept: "Tôi hiểu và đồng ý",
   setupPermissions: "Quyền truy cập",
   setupPermissionsHint:
@@ -191,8 +199,12 @@ const vi: typeof en = {
   processingSuccess: "Xong! Tệp đã sẵn sàng.",
   openMarkdown: "Mở Markdown",
   backToApp: "Quay lại",
+  backToHome: "Về trang chính",
   meetingName: "Tên cuộc họp",
   done: "Xong",
+  recordingTitle: "Bản ghi âm",
+  recordingHint:
+    "Bấm vào một dòng bản ghi để nhảy đến thời điểm đó, hoặc kéo thanh tua của trình phát.",
   recoveryTitle: "Khôi phục cuộc họp bị gián đoạn?",
   recoveryBody:
     "Sally tìm thấy một cuộc họp bị gián đoạn. Khôi phục bản ghi vào Markdown?",
@@ -209,6 +221,10 @@ const vi: typeof en = {
     "Chọn ứng dụng họp để chỉ thu âm thanh của nó. Giọng đọc bản dịch của Sally sẽ không bị thu lại, loại bỏ tiếng vọng. Ứng dụng phải đang phát âm thanh mới xuất hiện trong danh sách.",
   refresh: "Làm mới",
   alwaysOnTopDefault: "Luôn trên cùng theo mặc định",
+  saveAudio: "Lưu âm thanh cuộc họp",
+  saveAudioHint:
+    "Giữ bản ghi WAV cục bộ cạnh bản ghi chữ để nghe lại khi xem xét. Chỉ nằm trên máy này; không bao giờ tải lên.",
+  readoutSpeed: "Tốc độ đọc",
   liveModel: "Mô hình trực tiếp",
   cleanupModel: "Mô hình dọn bản ghi",
   save: "Lưu",
