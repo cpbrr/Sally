@@ -327,6 +327,21 @@ pub async fn resume_meeting(state: State<'_, AppState>) -> Result<()> {
     send_control(&state, Control::Resume).await
 }
 
+/// Restart microphone capture on a different device — the prompt shown
+/// when `sally://mic-lost` fires (e.g. the previous device was unplugged
+/// mid-meeting) calls this once the user picks a replacement. Persists the
+/// choice like `save_settings` does, and forwards it live to the running
+/// session; no meeting running is fine (still saved for the next one).
+#[tauri::command]
+pub async fn switch_mic(state: State<'_, AppState>, device: String) -> Result<RedactedConfig> {
+    let redacted = mutate_config(&state, true, |cfg| cfg.mic_device = device.clone()).await?;
+    let guard = state.session.lock().await;
+    if let Some(session) = guard.as_ref() {
+        let _ = session.control_tx.send(Control::SwitchMic(device)).await;
+    }
+    Ok(redacted)
+}
+
 /// Set translated-voice readout volume (0.0–1.0), applied live to a
 /// running meeting. `persist=false` for drag ticks (in-memory + live
 /// only); `persist=true` on release writes `.env`.

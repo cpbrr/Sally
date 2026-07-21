@@ -67,6 +67,7 @@ export function SessionBar() {
     statusDetail,
     meetingEndedAt,
     warning,
+    micLost,
     setPhase,
     setPaused,
     setReview,
@@ -75,6 +76,7 @@ export function SessionBar() {
     resetMeeting,
     setStatus,
     setConfig,
+    setMicLost,
   } = useSally(
     useShallow((s) => ({
       dict: s.dict,
@@ -88,6 +90,7 @@ export function SessionBar() {
       statusDetail: s.statusDetail,
       meetingEndedAt: s.meetingEndedAt,
       warning: s.warning,
+      micLost: s.micLost,
       setPhase: s.setPhase,
       setPaused: s.setPaused,
       setReview: s.setReview,
@@ -96,6 +99,7 @@ export function SessionBar() {
       resetMeeting: s.resetMeeting,
       setStatus: s.setStatus,
       setConfig: s.setConfig,
+      setMicLost: s.setMicLost,
     }))
   );
   const [now, setNow] = useState(Date.now());
@@ -105,6 +109,37 @@ export function SessionBar() {
   const [pickingSource, setPickingSource] = useState(false);
   const [audioApps, setAudioApps] = useState<string[]>([]);
   const [sourceChoice, setSourceChoice] = useState("");
+  const [micInputs, setMicInputs] = useState<string[]>([]);
+  const [micChoice, setMicChoice] = useState("");
+  const [micSwitching, setMicSwitching] = useState(false);
+  const [micError, setMicError] = useState("");
+
+  const refreshMicDevices = () =>
+    api.listAudioDevices().then((d) => setMicInputs(d.inputs)).catch(() => {});
+
+  useEffect(() => {
+    if (!micLost) return;
+    setMicError("");
+    setMicChoice(config?.mic_device ?? "");
+    refreshMicDevices();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [micLost]);
+
+  const switchMic = async () => {
+    setMicSwitching(true);
+    setMicError("");
+    try {
+      const updated = await api.switchMic(micChoice);
+      setConfig(updated);
+      // micLost flips to false once sally://mic-recovered arrives — no
+      // need to close the prompt here; if the new device also fails to
+      // capture, it stays open with the error below instead.
+    } catch (e) {
+      setMicError(String(e));
+    } finally {
+      setMicSwitching(false);
+    }
+  };
 
   useEffect(() => {
     if (phase !== "live") return;
@@ -295,6 +330,50 @@ export function SessionBar() {
                 disabled={busy}
               >
                 {dict.start}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {micLost && (
+        <div className="overlay">
+          <div className="sheet">
+            <h2>{dict.micLostTitle}</h2>
+            <p className="field-hint">{dict.micLostHint}</p>
+            {micError && <p className="error-text">{micError}</p>}
+            <div className="row">
+              <select
+                style={{ flex: 1 }}
+                value={micChoice}
+                onChange={(e) => setMicChoice(e.target.value)}
+              >
+                {micChoice && !micInputs.includes(micChoice) && (
+                  <option value={micChoice}>{micChoice}</option>
+                )}
+                {micInputs.map((d) => (
+                  <option key={d} value={d}>
+                    {d}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="btn compact"
+                title={dict.refresh}
+                onClick={refreshMicDevices}
+              >
+                <IconRefresh />
+              </button>
+            </div>
+            <div className="row end">
+              <button className="btn" onClick={() => setMicLost(false)}>
+                {dict.cancel}
+              </button>
+              <button
+                className="btn primary"
+                onClick={switchMic}
+                disabled={micSwitching || !micChoice}
+              >
+                {dict.switchMic}
               </button>
             </div>
           </div>

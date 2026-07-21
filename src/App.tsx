@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import {
   api,
   onEntry,
+  onMicLost,
+  onMicRecovered,
   onPartial,
   onStatus,
   onWarning,
@@ -81,6 +83,7 @@ export default function App() {
     addEntry,
     setPartial,
     setPaused,
+    setMicLost,
   } = useSally(
     useShallow((s) => ({
       phase: s.phase,
@@ -94,6 +97,7 @@ export default function App() {
       addEntry: s.addEntry,
       setPartial: s.setPartial,
       setPaused: s.setPaused,
+      setMicLost: s.setMicLost,
     }))
   );
   const booted = useRef(false);
@@ -113,6 +117,8 @@ export default function App() {
       onEntry((e) => addEntry(e)),
       onPartial((p) => setPartial(p)),
       onWarning((w) => setWarning(w)),
+      onMicLost(() => setMicLost(true)),
+      onMicRecovered(() => setMicLost(false)),
     ];
 
     api
