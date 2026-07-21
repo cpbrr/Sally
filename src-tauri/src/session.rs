@@ -204,6 +204,12 @@ struct Meeting {
     /// when the spoken language changes mid-stream. Only script-detectable
     /// languages participate (Latin-only text stays None and never splits).
     open_lang: Option<&'static str>,
+    /// Set for the rest of a turn once Gemini's output shows a degenerate
+    /// repetition loop (model-side failure, most often when the target is
+    /// Vietnamese) — muting readout for the remainder of the turn avoids
+    /// playing back the garbled/looping audio that goes with it. Reset at
+    /// every turn boundary alongside `open_lang`.
+    repeat_loop_muted: bool,
     /// A speaker-change boundary arrived but the rotation is deferred until
     /// the open entry's text reaches a sentence end, so the previous
     /// speaker's lagging transcription drains into their own entry.
@@ -285,6 +291,7 @@ impl Meeting {
                 &mut self.sealed_entries,
             );
             self.open_lang = None;
+            self.repeat_loop_muted = false;
             self.rotate_pending = false;
             self.last_fragment_ms = 0;
         } else if !self.paused
@@ -308,6 +315,7 @@ impl Meeting {
                 );
             }
             self.open_lang = None;
+            self.repeat_loop_muted = false;
             self.rotate_pending = false;
             emit_partial(&self.app, &self.assembler);
         }
@@ -349,6 +357,7 @@ impl Meeting {
                         );
                     }
                     self.open_lang = None;
+                    self.repeat_loop_muted = false;
                     self.rotate_pending = false;
                 }
                 // Language changed mid-stream (e.g. Japanese hand-off
@@ -373,6 +382,9 @@ impl Meeting {
                     self.open_lang = frag_lang;
                 }
                 self.assembler.push_original(&text, self.last_chunk_ms);
+                if crate::lang::has_repeat_loop(self.assembler.open_original_text()) {
+                    self.repeat_loop_muted = true;
+                }
                 // The fragment just appended may have completed the
                 // previous speaker's sentence — split now so the
                 // next fragment starts fresh. The size cap keeps an
@@ -392,6 +404,7 @@ impl Meeting {
                         );
                     }
                     self.open_lang = None;
+                    self.repeat_loop_muted = false;
                     self.rotate_pending = false;
                 }
                 self.last_fragment_ms = self.last_chunk_ms;
@@ -399,6 +412,9 @@ impl Meeting {
             }
             Some(LiveEvent::Translated(text)) => {
                 self.assembler.push_translated(&text, self.last_chunk_ms);
+                if crate::lang::has_repeat_loop(self.assembler.active_translated_text()) {
+                    self.repeat_loop_muted = true;
+                }
                 self.last_fragment_ms = self.last_chunk_ms;
                 emit_partial(&self.app, &self.assembler);
             }
@@ -408,7 +424,18 @@ impl Meeting {
                 // that, no gating: Gemini translates every passage
                 // uniformly (echoTargetLanguage: true), so this plays
                 // regardless of source language, including source == target.
-                if self.readout_enabled && !self.paused && !self.assembler.open_mic_dominated() {
+                // The one exception: Gemini's live-translate model has a
+                // known failure mode where it gets stuck in a degenerate
+                // repetition loop (garbled/looping audio, sometimes with
+                // captured sound baked in) — most commonly reported when
+                // the target is Vietnamese. Once that shows up in either
+                // transcript stream, mute for the rest of the turn instead
+                // of playing the garbage back.
+                if self.readout_enabled
+                    && !self.paused
+                    && !self.assembler.open_mic_dominated()
+                    && !self.repeat_loop_muted
+                {
                     play(
                         &mut self.player,
                         &mut self.readout_enabled,
@@ -431,6 +458,7 @@ impl Meeting {
                     );
                 }
                 self.open_lang = None;
+                self.repeat_loop_muted = false;
                 self.rotate_pending = false;
                 self.last_fragment_ms = 0;
             }
@@ -569,6 +597,7 @@ async fn run_session(
         player: None,
         recorder,
         open_lang: None,
+        repeat_loop_muted: false,
         rotate_pending: false,
         pending_since_len: 0,
         split_det: None,

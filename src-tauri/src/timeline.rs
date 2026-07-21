@@ -112,6 +112,17 @@ impl Assembler {
         self.open.as_ref().map(|e| e.original.chars().count()).unwrap_or(0)
     }
 
+    /// Translated text accumulated for whichever entry is currently
+    /// receiving translation fragments — mirrors `push_translated`'s own
+    /// routing (closing takes priority whenever it exists, else open).
+    pub fn active_translated_text(&self) -> &str {
+        self.closing
+            .as_ref()
+            .map(|e| e.translated.as_str())
+            .or_else(|| self.open.as_ref().map(|e| e.translated.as_str()))
+            .unwrap_or("")
+    }
+
     /// Start timestamp of the currently open entry, for duration-based
     /// splitting of long uninterrupted turns.
     pub fn open_start_ms(&self) -> Option<u64> {
@@ -338,6 +349,21 @@ mod tests {
         assert_eq!(a.open_original_text(), "");
         a.push_original("new open text", 3000);
         assert_eq!(a.open_original_text(), "new open text");
+    }
+
+    #[test]
+    fn active_translated_text_follows_push_translated_routing() {
+        let mut a = Assembler::new();
+        // No closing yet: translation lands in (and reads from) open.
+        a.push_original("first speaker words", 1000);
+        a.push_translated("partial one", 1100);
+        assert_eq!(a.active_translated_text(), "partial one");
+        // Speaker changes: closing now exists, so routing (and this
+        // accessor) both prefer it, even before it has any text yet.
+        assert!(a.rotate_turn().is_none());
+        assert_eq!(a.active_translated_text(), "partial one");
+        a.push_translated(" continues", 1200);
+        assert_eq!(a.active_translated_text(), "partial one continues");
     }
 
     #[test]
