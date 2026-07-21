@@ -147,8 +147,7 @@ pub fn spawn_sck_capture(
     stop: Arc<AtomicBool>,
     capture_app: String,
 ) -> Result<std::thread::JoinHandle<()>> {
-    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<()>>();
-    let handle = std::thread::spawn(move || {
+    super::spawn_with_ready_signal("ScreenCaptureKit", move |ready_tx| {
         let started = (|| -> std::result::Result<SCStream, String> {
             let content = SCShareableContent::get().map_err(|e| {
                 format!(
@@ -219,15 +218,5 @@ pub fn spawn_sck_capture(
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
         let _ = stream.stop_capture();
-    });
-    match ready_rx.recv() {
-        Ok(Ok(())) => Ok(handle),
-        Ok(Err(e)) => {
-            let _ = handle.join();
-            Err(e)
-        }
-        Err(_) => Err(SallyError::Audio(
-            "ScreenCaptureKit thread died during startup".into(),
-        )),
-    }
+    })
 }

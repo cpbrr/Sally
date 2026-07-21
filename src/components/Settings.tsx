@@ -1,13 +1,15 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { useEffect, useState } from "react";
+import { Dispatch, SetStateAction, useEffect, useState } from "react";
 import { api, AudioDevices } from "../api";
 import {
   DEFAULT_CLEANUP_MODEL,
   DEFAULT_LIVE_MODEL,
+  Dict,
   TARGET_LANGUAGES,
   UiLanguage,
 } from "../i18n";
-import { useSally } from "../store";
+import { Phase, useSally } from "../store";
+import { useShallow } from "zustand/react/shallow";
 import {
   isTranslucent,
   loadLevel,
@@ -17,9 +19,177 @@ import {
 import { IconChevron, IconEye, IconEyeOff, IconRefresh, IconReset } from "./Icons";
 import { isMac } from "../platform";
 
+type SettingsForm = {
+  ui_language: string;
+  target_language: string;
+  data_dir: string;
+  mic_device: string;
+  system_device: string;
+  capture_app: string;
+  live_model: string;
+  cleanup_model: string;
+  save_audio: boolean;
+  mac_capture_method: string;
+};
+
+function AdvancedSettings({
+  dict,
+  showAdvanced,
+  onToggleAdvanced,
+  form,
+  setForm,
+  phase,
+  apiKey,
+  onApiKeyChange,
+  showKey,
+  onToggleShowKey,
+}: {
+  dict: Dict;
+  showAdvanced: boolean;
+  onToggleAdvanced: () => void;
+  form: SettingsForm;
+  setForm: Dispatch<SetStateAction<SettingsForm>>;
+  phase: Phase;
+  apiKey: string;
+  onApiKeyChange: (v: string) => void;
+  showKey: boolean;
+  onToggleShowKey: () => void;
+}) {
+  return (
+    <>
+      <button className="btn advanced-toggle" onClick={onToggleAdvanced}>
+        <IconChevron open={showAdvanced} /> {dict.advanced}
+      </button>
+
+      {showAdvanced && (
+        <>
+          {isMac() && (
+            <label>
+              {dict.macCaptureMethod}
+              <select
+                value={form.mac_capture_method}
+                onChange={(e) =>
+                  setForm({ ...form, mac_capture_method: e.target.value })
+                }
+              >
+                <option value="auto">{dict.macCaptureAuto}</option>
+                <option value="tap">{dict.macCaptureTap}</option>
+                <option value="screencapturekit">
+                  {dict.macCaptureSCK}
+                </option>
+              </select>
+            </label>
+          )}
+          {isMac() && (
+            <p className="field-hint">{dict.macCaptureMethodHint}</p>
+          )}
+
+          <label>
+            {dict.setupApiKey}
+            <div className="row">
+              <input
+                type={showKey ? "text" : "password"}
+                style={{ flex: 1 }}
+                value={apiKey}
+                onChange={(e) => onApiKeyChange(e.target.value)}
+              />
+              <button
+                className="btn compact"
+                title={showKey ? "Hide" : "Show"}
+                onClick={onToggleShowKey}
+              >
+                {showKey ? <IconEyeOff /> : <IconEye />}
+              </button>
+            </div>
+          </label>
+
+          <label>
+            {dict.setupLanguage}
+            <select
+              value={form.ui_language}
+              onChange={(e) => setForm({ ...form, ui_language: e.target.value })}
+            >
+              <option value="en">English</option>
+              <option value="vi">Tiếng Việt</option>
+            </select>
+          </label>
+
+          <label>
+            {dict.targetLanguage}
+            <select
+              value={form.target_language}
+              disabled={phase === "live"}
+              onChange={(e) =>
+                setForm({ ...form, target_language: e.target.value })
+              }
+            >
+              {TARGET_LANGUAGES.map((l) => (
+                <option key={l} value={l}>
+                  {l}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label>
+            {dict.liveModel}
+            <div className="row">
+              <input
+                type="text"
+                style={{ flex: 1 }}
+                value={form.live_model}
+                onChange={(e) => setForm({ ...form, live_model: e.target.value })}
+              />
+              <button
+                className="btn compact"
+                title={dict.revertDefault}
+                onClick={() => setForm({ ...form, live_model: DEFAULT_LIVE_MODEL })}
+              >
+                <IconReset />
+              </button>
+            </div>
+          </label>
+
+          <label>
+            {dict.cleanupModel}
+            <div className="row">
+              <input
+                type="text"
+                style={{ flex: 1 }}
+                value={form.cleanup_model}
+                onChange={(e) =>
+                  setForm({ ...form, cleanup_model: e.target.value })
+                }
+              />
+              <button
+                className="btn compact"
+                title={dict.revertDefault}
+                onClick={() =>
+                  setForm({ ...form, cleanup_model: DEFAULT_CLEANUP_MODEL })
+                }
+              >
+                <IconReset />
+              </button>
+            </div>
+          </label>
+        </>
+      )}
+    </>
+  );
+}
+
 export function Settings() {
   const { dict, config, setConfig, setUiLanguage, setShowSettings, phase } =
-    useSally();
+    useSally(
+      useShallow((s) => ({
+        dict: s.dict,
+        config: s.config,
+        setConfig: s.setConfig,
+        setUiLanguage: s.setUiLanguage,
+        setShowSettings: s.setShowSettings,
+        phase: s.phase,
+      }))
+    );
   const [devices, setDevices] = useState<AudioDevices>({ inputs: [], outputs: [] });
   const [audioApps, setAudioApps] = useState<string[]>([]);
   const [apiKey, setApiKey] = useState("");
@@ -194,126 +364,18 @@ export function Settings() {
           </label>
         )}
 
-        <button
-          className="btn advanced-toggle"
-          onClick={() => setShowAdvanced(!showAdvanced)}
-        >
-          <IconChevron open={showAdvanced} /> {dict.advanced}
-        </button>
-
-        {showAdvanced && (
-          <>
-            {isMac() && (
-              <label>
-                {dict.macCaptureMethod}
-                <select
-                  value={form.mac_capture_method}
-                  onChange={(e) =>
-                    setForm({ ...form, mac_capture_method: e.target.value })
-                  }
-                >
-                  <option value="auto">{dict.macCaptureAuto}</option>
-                  <option value="tap">{dict.macCaptureTap}</option>
-                  <option value="screencapturekit">
-                    {dict.macCaptureSCK}
-                  </option>
-                </select>
-              </label>
-            )}
-            {isMac() && (
-              <p className="field-hint">{dict.macCaptureMethodHint}</p>
-            )}
-
-            <label>
-              {dict.setupApiKey}
-              <div className="row">
-                <input
-                  type={showKey ? "text" : "password"}
-                  style={{ flex: 1 }}
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                />
-                <button
-                  className="btn compact"
-                  title={showKey ? "Hide" : "Show"}
-                  onClick={() => setShowKey(!showKey)}
-                >
-                  {showKey ? <IconEyeOff /> : <IconEye />}
-                </button>
-              </div>
-            </label>
-
-            <label>
-              {dict.setupLanguage}
-              <select
-                value={form.ui_language}
-                onChange={(e) => setForm({ ...form, ui_language: e.target.value })}
-              >
-                <option value="en">English</option>
-                <option value="vi">Tiếng Việt</option>
-              </select>
-            </label>
-
-            <label>
-              {dict.targetLanguage}
-              <select
-                value={form.target_language}
-                disabled={phase === "live"}
-                onChange={(e) =>
-                  setForm({ ...form, target_language: e.target.value })
-                }
-              >
-                {TARGET_LANGUAGES.map((l) => (
-                  <option key={l} value={l}>
-                    {l}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label>
-              {dict.liveModel}
-              <div className="row">
-                <input
-                  type="text"
-                  style={{ flex: 1 }}
-                  value={form.live_model}
-                  onChange={(e) => setForm({ ...form, live_model: e.target.value })}
-                />
-                <button
-                  className="btn compact"
-                  title={dict.revertDefault}
-                  onClick={() => setForm({ ...form, live_model: DEFAULT_LIVE_MODEL })}
-                >
-                  <IconReset />
-                </button>
-              </div>
-            </label>
-
-            <label>
-              {dict.cleanupModel}
-              <div className="row">
-                <input
-                  type="text"
-                  style={{ flex: 1 }}
-                  value={form.cleanup_model}
-                  onChange={(e) =>
-                    setForm({ ...form, cleanup_model: e.target.value })
-                  }
-                />
-                <button
-                  className="btn compact"
-                  title={dict.revertDefault}
-                  onClick={() =>
-                    setForm({ ...form, cleanup_model: DEFAULT_CLEANUP_MODEL })
-                  }
-                >
-                  <IconReset />
-                </button>
-              </div>
-            </label>
-          </>
-        )}
+        <AdvancedSettings
+          dict={dict}
+          showAdvanced={showAdvanced}
+          onToggleAdvanced={() => setShowAdvanced(!showAdvanced)}
+          form={form}
+          setForm={setForm}
+          phase={phase}
+          apiKey={apiKey}
+          onApiKeyChange={setApiKey}
+          showKey={showKey}
+          onToggleShowKey={() => setShowKey(!showKey)}
+        />
 
         {error && <p className="error-text">{error}</p>}
 

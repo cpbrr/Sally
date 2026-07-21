@@ -62,8 +62,7 @@ pub fn spawn_tap_capture(
     tx: mpsc::Sender<RawFrame>,
     stop: Arc<AtomicBool>,
 ) -> Result<std::thread::JoinHandle<()>> {
-    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<()>>();
-    let handle = std::thread::spawn(move || {
+    super::spawn_with_ready_signal("Core Audio tap", move |ready_tx| {
         let setup = unsafe { setup_tap(session_start, tx, stop.clone()) };
         let (tap_id, aggregate_id, io_proc_id, ctx) = match setup {
             Ok(h) => {
@@ -79,17 +78,7 @@ pub fn spawn_tap_capture(
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
         unsafe { teardown(tap_id, aggregate_id, io_proc_id, ctx) };
-    });
-    match ready_rx.recv() {
-        Ok(Ok(())) => Ok(handle),
-        Ok(Err(e)) => {
-            let _ = handle.join();
-            Err(e)
-        }
-        Err(_) => Err(SallyError::Audio(
-            "Core Audio tap thread died during startup".into(),
-        )),
-    }
+    })
 }
 
 type SetupOutput = (AudioObjectID, AudioObjectID, AudioDeviceIOProcID, *mut TapContext);
@@ -213,10 +202,22 @@ unsafe fn teardown(
     io_proc_id: AudioDeviceIOProcID,
     ctx: *mut TapContext,
 ) {
-    AudioDeviceStop(aggregate_id, io_proc_id);
-    AudioDeviceDestroyIOProcID(aggregate_id, io_proc_id);
-    AudioHardwareDestroyAggregateDevice(aggregate_id);
-    AudioHardwareDestroyProcessTap(tap_id);
+    let status = AudioDeviceStop(aggregate_id, io_proc_id);
+    if status != 0 {
+        log::warn!("AudioDeviceStop failed during teardown: OSStatus {status}");
+    }
+    let status = AudioDeviceDestroyIOProcID(aggregate_id, io_proc_id);
+    if status != 0 {
+        log::warn!("AudioDeviceDestroyIOProcID failed during teardown: OSStatus {status}");
+    }
+    let status = AudioHardwareDestroyAggregateDevice(aggregate_id);
+    if status != 0 {
+        log::warn!("AudioHardwareDestroyAggregateDevice failed during teardown: OSStatus {status}");
+    }
+    let status = AudioHardwareDestroyProcessTap(tap_id);
+    if status != 0 {
+        log::warn!("AudioHardwareDestroyProcessTap failed during teardown: OSStatus {status}");
+    }
     if !ctx.is_null() {
         drop(Box::from_raw(ctx));
     }

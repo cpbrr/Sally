@@ -7,12 +7,20 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { useEffect, useRef, useState } from "react";
-import { api, formatTimestamp, MeetingFile, TranscriptChunk } from "../api";
+import {
+  api,
+  formatTimestamp,
+  MeetingFile,
+  ReviewInfo,
+  TranscriptChunk,
+} from "../api";
 import { useSally } from "../store";
+import { useShallow } from "zustand/react/shallow";
 import { IconFolder, IconSwap } from "./Icons";
 
 export function SavedPopup() {
-  const { dict, setPhase } = useSally();
+  const dict = useSally((s) => s.dict);
+  const setPhase = useSally((s) => s.setPhase);
   return (
     <div className="overlay">
       <div className="sheet">
@@ -31,8 +39,96 @@ export function SavedPopup() {
   );
 }
 
+function RecordingPlayer({
+  review,
+  audioPath,
+  chunkLang,
+  onToggleChunkLang,
+}: {
+  review: ReviewInfo;
+  audioPath: string;
+  chunkLang: "original" | "translated";
+  onToggleChunkLang: () => void;
+}) {
+  const dict = useSally((s) => s.dict);
+  const [chunks, setChunks] = useState<TranscriptChunk[]>([]);
+  const audioRef = useRef<HTMLAudioElement>(null);
+
+  // Clickable transcript blocks for the recording, refreshed whenever a
+  // meeting with a recording is (re)opened.
+  useEffect(() => {
+    if (review?.audio_path) {
+      api.meetingChunks().then(setChunks).catch(() => setChunks([]));
+    } else {
+      setChunks([]);
+    }
+  }, [review?.raw_path, review?.audio_path]);
+
+  const jumpTo = (ms: number) => {
+    const el = audioRef.current;
+    if (!el) return;
+    el.currentTime = ms / 1000;
+    el.play().catch(() => {});
+  };
+
+  return (
+    <div className="recording">
+      <div className="row">
+        <h3 style={{ flex: 1 }}>{dict.recordingTitle}</h3>
+        {chunks.length > 0 && (
+          <button
+            className={`btn compact ${
+              chunkLang === "translated" ? "primary" : ""
+            }`}
+            title={dict.toggleChunkLang}
+            onClick={onToggleChunkLang}
+          >
+            <IconSwap />
+          </button>
+        )}
+      </div>
+      <audio
+        ref={audioRef}
+        controls
+        preload="metadata"
+        src={convertFileSrc(audioPath)}
+        style={{ width: "100%" }}
+      />
+      {chunks.length > 0 && (
+        <>
+          <p className="field-hint">{dict.recordingHint}</p>
+          <div className="chunk-list">
+            {chunks.map((c, i) => (
+              <button
+                key={i}
+                className="chunk-btn"
+                onClick={() => jumpTo(c.start_ms)}
+              >
+                <span className="meta">{formatTimestamp(c.start_ms)}</span>
+                <span className="speaker">{c.speaker}</span>
+                <span className="chunk-text">
+                  {chunkLang === "translated"
+                    ? c.translated || c.text
+                    : c.text || c.translated}
+                </span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function ProcessingScreen() {
-  const { dict, review, setReview, setPhase } = useSally();
+  const { dict, review, setReview, setPhase } = useSally(
+    useShallow((s) => ({
+      dict: s.dict,
+      review: s.review,
+      setReview: s.setReview,
+      setPhase: s.setPhase,
+    }))
+  );
   const [meetings, setMeetings] = useState<MeetingFile[]>([]);
   const [meetingTitle, setMeetingTitle] = useState("");
   const [includeTimestamps, setIncludeTimestamps] = useState(true);
@@ -41,11 +137,12 @@ export function ProcessingScreen() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
   const [resultPath, setResultPath] = useState<string | null>(null);
-  const [chunks, setChunks] = useState<TranscriptChunk[]>([]);
+  // Owned here (not inside RecordingPlayer) so the toggle survives that
+  // component unmounting/remounting when switching away from a meeting
+  // with a recording and back.
   const [chunkLang, setChunkLang] = useState<"original" | "translated">(
     "original"
   );
-  const audioRef = useRef<HTMLAudioElement>(null);
 
   // Load the meeting list; open the newest when nothing is selected yet.
   useEffect(() => {
@@ -71,23 +168,6 @@ export function ProcessingScreen() {
     } catch (e) {
       setError(String(e));
     }
-  };
-
-  // Clickable transcript blocks for the recording, refreshed whenever a
-  // meeting with a recording is (re)opened.
-  useEffect(() => {
-    if (review?.audio_path) {
-      api.meetingChunks().then(setChunks).catch(() => setChunks([]));
-    } else {
-      setChunks([]);
-    }
-  }, [review?.raw_path, review?.audio_path]);
-
-  const jumpTo = (ms: number) => {
-    const el = audioRef.current;
-    if (!el) return;
-    el.currentTime = ms / 1000;
-    el.play().catch(() => {});
   };
 
   const run = async () => {
@@ -149,55 +229,14 @@ export function ProcessingScreen() {
         </label>
 
         {review?.audio_path && (
-          <div className="recording">
-            <div className="row">
-              <h3 style={{ flex: 1 }}>{dict.recordingTitle}</h3>
-              {chunks.length > 0 && (
-                <button
-                  className={`btn compact ${
-                    chunkLang === "translated" ? "primary" : ""
-                  }`}
-                  title={dict.toggleChunkLang}
-                  onClick={() =>
-                    setChunkLang(
-                      chunkLang === "original" ? "translated" : "original"
-                    )
-                  }
-                >
-                  <IconSwap />
-                </button>
-              )}
-            </div>
-            <audio
-              ref={audioRef}
-              controls
-              preload="metadata"
-              src={convertFileSrc(review.audio_path)}
-              style={{ width: "100%" }}
-            />
-            {chunks.length > 0 && (
-              <>
-                <p className="field-hint">{dict.recordingHint}</p>
-                <div className="chunk-list">
-                  {chunks.map((c, i) => (
-                    <button
-                      key={i}
-                      className="chunk-btn"
-                      onClick={() => jumpTo(c.start_ms)}
-                    >
-                      <span className="meta">{formatTimestamp(c.start_ms)}</span>
-                      <span className="speaker">{c.speaker}</span>
-                      <span className="chunk-text">
-                        {chunkLang === "translated"
-                          ? c.translated || c.text
-                          : c.text || c.translated}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
+          <RecordingPlayer
+            review={review}
+            audioPath={review.audio_path}
+            chunkLang={chunkLang}
+            onToggleChunkLang={() =>
+              setChunkLang((l) => (l === "original" ? "translated" : "original"))
+            }
+          />
         )}
 
         {review && resultPath === null && (

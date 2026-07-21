@@ -286,48 +286,48 @@ pub fn render_polished(
         "# {title} — {}\n\n## {}\n\n{}\n\n",
         h.meeting_notes, h.summary, summary.summary
     );
-    out.push_str(&format!("## {}\n\n", h.key_decisions));
-    if summary.decisions.is_empty() {
-        out.push_str(h.none_recorded);
-        out.push_str("\n\n");
-    } else {
-        for d in &summary.decisions {
-            out.push_str(&format!("- {d}\n"));
+    render_section(&mut out, h.key_decisions, h.none_recorded, &summary.decisions, |d| {
+        format!("- {d}")
+    });
+    render_section(&mut out, h.action_items, h.none_recorded, &summary.action_items, |a| {
+        let mut line = format!("- {}", a.item);
+        if !a.owner.is_empty() {
+            line.push_str(&format!(" — {}", a.owner));
         }
-        out.push('\n');
-    }
-    out.push_str(&format!("## {}\n\n", h.action_items));
-    if summary.action_items.is_empty() {
-        out.push_str(h.none_recorded);
-        out.push_str("\n\n");
-    } else {
-        for a in &summary.action_items {
-            let mut line = format!("- {}", a.item);
-            if !a.owner.is_empty() {
-                line.push_str(&format!(" — {}", a.owner));
-            }
-            if !a.deadline.is_empty() {
-                line.push_str(&format!(" ({} {})", h.due, a.deadline));
-            }
-            out.push_str(&line);
-            out.push('\n');
+        if !a.deadline.is_empty() {
+            line.push_str(&format!(" ({} {})", h.due, a.deadline));
         }
-        out.push('\n');
-    }
-    out.push_str(&format!("## {}\n\n", h.open_questions));
-    if summary.open_questions.is_empty() {
-        out.push_str(h.none_recorded);
-        out.push_str("\n\n");
-    } else {
-        for q in &summary.open_questions {
-            out.push_str(&format!("- {q}\n"));
-        }
-        out.push('\n');
-    }
+        line
+    });
+    render_section(&mut out, h.open_questions, h.none_recorded, &summary.open_questions, |q| {
+        format!("- {q}")
+    });
     out.push_str(&format!("## {}\n\n", h.cleaned_transcript));
     out.push_str(cleaned);
     out.push('\n');
     out
+}
+
+/// One polished-file section: a `## Header`, then either `none_recorded` or
+/// one rendered line per item.
+fn render_section<T>(
+    out: &mut String,
+    header: &str,
+    none_recorded: &str,
+    items: &[T],
+    render_item: impl Fn(&T) -> String,
+) {
+    out.push_str(&format!("## {header}\n\n"));
+    if items.is_empty() {
+        out.push_str(none_recorded);
+        out.push_str("\n\n");
+    } else {
+        for item in items {
+            out.push_str(&render_item(item));
+            out.push('\n');
+        }
+        out.push('\n');
+    }
 }
 
 #[cfg(test)]

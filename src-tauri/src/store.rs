@@ -205,28 +205,19 @@ impl MeetingStore {
         if new_stem == self.stem {
             return Ok(());
         }
-        let moves = [
-            (self.raw_dir.clone(), format!("{}.md", self.stem), format!("{new_stem}.md")),
-            (
-                self.raw_dir.clone(),
-                format!("{}-no-timestamps.md", self.stem),
-                format!("{new_stem}-no-timestamps.md"),
-            ),
-            (
-                self.polished_dir.clone(),
-                format!("{}.md", self.stem),
-                format!("{new_stem}.md"),
-            ),
-            (
-                self.audio_dir.clone(),
-                format!("{}.wav", self.stem),
-                format!("{new_stem}.wav"),
-            ),
+        // (dir, suffix) pairs mirror raw_path/export_path/polished_path/
+        // audio_path's own {stem}+suffix construction, kept in one place so
+        // a future filename-convention change only needs to happen once.
+        let kinds: [(&Path, &str); 4] = [
+            (&self.raw_dir, ".md"),
+            (&self.raw_dir, "-no-timestamps.md"),
+            (&self.polished_dir, ".md"),
+            (&self.audio_dir, ".wav"),
         ];
-        for (dir, old_name, new_name) in moves {
-            let old = dir.join(old_name);
+        for (dir, suffix) in kinds {
+            let old = dir.join(format!("{}{suffix}", self.stem));
             if old.exists() {
-                std::fs::rename(old, dir.join(new_name))?;
+                std::fs::rename(&old, dir.join(format!("{new_stem}{suffix}")))?;
             }
         }
         let old_journal = self.journal_path();

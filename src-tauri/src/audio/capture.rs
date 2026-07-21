@@ -128,14 +128,15 @@ pub fn start_capture(
     })
 }
 
+fn find_by_name(mut devices: impl Iterator<Item = cpal::Device>, name: &str) -> Option<cpal::Device> {
+    devices.find(|d| d.name().map(|n| n == name).unwrap_or(false))
+}
+
 fn find_input_device(host: &cpal::Host, name: &str) -> Option<cpal::Device> {
     if name.is_empty() {
         return host.default_input_device();
     }
-    host.input_devices()
-        .ok()?
-        .find(|d| d.name().map(|n| n == name).unwrap_or(false))
-        .or_else(|| host.default_input_device())
+    find_by_name(host.input_devices().ok()?, name).or_else(|| host.default_input_device())
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -143,10 +144,7 @@ fn find_output_device(host: &cpal::Host, name: &str) -> Option<cpal::Device> {
     if name.is_empty() {
         return host.default_output_device();
     }
-    host.output_devices()
-        .ok()?
-        .find(|d| d.name().map(|n| n == name).unwrap_or(false))
-        .or_else(|| host.default_output_device())
+    find_by_name(host.output_devices().ok()?, name).or_else(|| host.default_output_device())
 }
 
 /// The cpal `Stream` is not `Send`, so each capture runs on its own thread
@@ -188,72 +186,7 @@ fn spawn_system_thread(
 ) -> Result<(std::thread::JoinHandle<()>, bool)> {
     #[cfg(target_os = "macos")]
     {
-        let mut attempts: Vec<String> = Vec::new();
-        let want_app = !capture_app.is_empty();
-
-        // A specific app can only be isolated through ScreenCaptureKit's
-        // per-application filter today — the Core Audio tap only knows how
-        // to tap everything — so a capture_app selection skips straight to
-        // SCK regardless of OS version or the method preference below.
-        let want_tap = !want_app
-            && match mac_capture_method.as_str() {
-                "tap" => true,
-                "screencapturekit" => false,
-                _ => macos_version()
-                    .map(|(major, minor)| major > 14 || (major == 14 && minor >= 4))
-                    .unwrap_or(false),
-            };
-
-        if want_tap {
-            match super::coreaudio_tap::spawn_tap_capture(session_start, tx.clone(), stop.clone())
-            {
-                Ok(handle) => return Ok((handle, false)),
-                Err(e) => {
-                    log::warn!("Core Audio process tap unavailable, trying ScreenCaptureKit: {e}");
-                    attempts.push(format!("Core Audio tap: {e}"));
-                }
-            }
-        }
-
-        match super::sck_capture::spawn_sck_capture(
-            session_start,
-            tx.clone(),
-            stop.clone(),
-            capture_app,
-        ) {
-            Ok(handle) => return Ok((handle, want_app)),
-            Err(e) => {
-                log::warn!("ScreenCaptureKit unavailable, falling back to loopback device: {e}");
-                attempts.push(format!("ScreenCaptureKit: {e}"));
-            }
-        }
-
-        return spawn_capture_thread(
-            move || {
-                let host = cpal::default_host();
-                // System audio arrives through a loopback input device
-                // (BlackHole or similar) that the user routes meeting audio
-                // into. Selected by name; with no selection, look for a
-                // BlackHole-style device.
-                let device = find_macos_loopback_device(&host, &device_name).ok_or_else(|| {
-                    SallyError::Audio(format!(
-                        "no native system-audio capture worked, and no loopback \
-                         input device is selected either:\n{}\nInstall a loopback \
-                         driver such as BlackHole, route meeting audio to it (Multi-\
-                         Output Device), and select it as the system audio device in \
-                         Settings — or grant the permission the errors above are \
-                         asking for and restart the meeting.",
-                        attempts.join("\n")
-                    ))
-                })?;
-                let config = device
-                    .default_input_config()
-                    .map_err(|e| SallyError::Audio(format!("loopback config: {e}")))?;
-                build_stream(&device, &config, AudioSource::System, session_start, tx)
-            },
-            stop,
-        )
-        .map(|handle| (handle, false));
+        spawn_macos_system_thread(device_name, capture_app, mac_capture_method, session_start, tx, stop)
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -272,20 +205,100 @@ fn spawn_system_thread(
     }
 }
 
+#[cfg(target_os = "macos")]
+fn spawn_macos_system_thread(
+    device_name: String,
+    capture_app: String,
+    mac_capture_method: String,
+    session_start: Instant,
+    tx: mpsc::Sender<RawFrame>,
+    stop: Arc<AtomicBool>,
+) -> Result<(std::thread::JoinHandle<()>, bool)> {
+    let mut attempts: Vec<String> = Vec::new();
+    let want_app = !capture_app.is_empty();
+
+    // A specific app can only be isolated through ScreenCaptureKit's
+    // per-application filter today — the Core Audio tap only knows how
+    // to tap everything — so a capture_app selection skips straight to
+    // SCK regardless of OS version or the method preference below.
+    let want_tap = !want_app
+        && match mac_capture_method.as_str() {
+            "tap" => true,
+            "screencapturekit" => false,
+            _ => macos_version()
+                .map(|(major, minor)| major > 14 || (major == 14 && minor >= 4))
+                .unwrap_or(false),
+        };
+
+    if want_tap {
+        match super::coreaudio_tap::spawn_tap_capture(session_start, tx.clone(), stop.clone())
+        {
+            Ok(handle) => return Ok((handle, false)),
+            Err(e) => {
+                log::warn!("Core Audio process tap unavailable, trying ScreenCaptureKit: {e}");
+                attempts.push(format!("Core Audio tap: {e}"));
+            }
+        }
+    }
+
+    match super::sck_capture::spawn_sck_capture(
+        session_start,
+        tx.clone(),
+        stop.clone(),
+        capture_app,
+    ) {
+        Ok(handle) => return Ok((handle, want_app)),
+        Err(e) => {
+            log::warn!("ScreenCaptureKit unavailable, falling back to loopback device: {e}");
+            attempts.push(format!("ScreenCaptureKit: {e}"));
+        }
+    }
+
+    return spawn_capture_thread(
+        move || {
+            let host = cpal::default_host();
+            // System audio arrives through a loopback input device
+            // (BlackHole or similar) that the user routes meeting audio
+            // into. Selected by name; with no selection, look for a
+            // BlackHole-style device.
+            let device = find_macos_loopback_device(&host, &device_name).ok_or_else(|| {
+                SallyError::Audio(format!(
+                    "no native system-audio capture worked, and no loopback \
+                     input device is selected either:\n{}\nInstall a loopback \
+                     driver such as BlackHole, route meeting audio to it (Multi-\
+                     Output Device), and select it as the system audio device in \
+                     Settings — or grant the permission the errors above are \
+                     asking for and restart the meeting.",
+                    attempts.join("\n")
+                ))
+            })?;
+            let config = device
+                .default_input_config()
+                .map_err(|e| SallyError::Audio(format!("loopback config: {e}")))?;
+            build_stream(&device, &config, AudioSource::System, session_start, tx)
+        },
+        stop,
+    )
+    .map(|handle| (handle, false));
+}
+
 /// `(major, minor)` from `sw_vers -productVersion`, best-effort. Used only
 /// to decide whether the Core Audio process-tap API (14.4+) is worth
 /// attempting before falling back to ScreenCaptureKit.
 #[cfg(target_os = "macos")]
 fn macos_version() -> Option<(u32, u32)> {
-    let out = std::process::Command::new("sw_vers")
-        .arg("-productVersion")
-        .output()
-        .ok()?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    let mut parts = text.trim().split('.');
-    let major: u32 = parts.next()?.parse().ok()?;
-    let minor: u32 = parts.next().unwrap_or("0").parse().unwrap_or(0);
-    Some((major, minor))
+    static VERSION: std::sync::OnceLock<Option<(u32, u32)>> = std::sync::OnceLock::new();
+    *VERSION.get_or_init(|| {
+        let out = std::process::Command::new("sw_vers")
+            .arg("-productVersion")
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        let mut parts = text.trim().split('.');
+        let major: u32 = parts.next()?.parse().ok()?;
+        let minor: u32 = parts.next().unwrap_or("0").parse().unwrap_or(0);
+        Some((major, minor))
+    })
 }
 
 /// A named loopback input device, or any device whose name suggests a
@@ -296,9 +309,7 @@ fn macos_version() -> Option<(u32, u32)> {
 fn find_macos_loopback_device(host: &cpal::Host, name: &str) -> Option<cpal::Device> {
     let devices: Vec<cpal::Device> = host.input_devices().ok()?.collect();
     if !name.is_empty() {
-        return devices
-            .into_iter()
-            .find(|d| d.name().map(|n| n == name).unwrap_or(false));
+        return find_by_name(devices.into_iter(), name);
     }
     devices.into_iter().find(|d| {
         d.name()
@@ -314,8 +325,7 @@ fn spawn_capture_thread(
     make_stream: impl FnOnce() -> Result<cpal::Stream> + Send + 'static,
     stop: Arc<AtomicBool>,
 ) -> Result<std::thread::JoinHandle<()>> {
-    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<()>>();
-    let handle = std::thread::spawn(move || {
+    super::spawn_with_ready_signal("capture", move |ready_tx| {
         let stream = match make_stream() {
             Ok(s) => {
                 let _ = ready_tx.send(Ok(()));
@@ -334,15 +344,7 @@ fn spawn_capture_thread(
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
         drop(stream);
-    });
-    match ready_rx.recv() {
-        Ok(Ok(())) => Ok(handle),
-        Ok(Err(e)) => {
-            let _ = handle.join();
-            Err(e)
-        }
-        Err(_) => Err(SallyError::Audio("capture thread died during startup".into())),
-    }
+    })
 }
 
 fn build_stream(

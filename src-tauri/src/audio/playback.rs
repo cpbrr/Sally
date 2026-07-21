@@ -56,11 +56,10 @@ impl Player {
             .map_err(|e| SallyError::Audio(format!("output config: {e}")))?;
         let device_rate = config.sample_rate().0;
 
-        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<()>>();
         let q = queue.clone();
         let stop_flag = stop.clone();
         let vol = volume.clone();
-        let thread = std::thread::spawn(move || {
+        let thread = super::spawn_with_ready_signal("readout", move |ready_tx| {
             let stream = match build_output_stream(&device, &config, q, vol) {
                 Ok(s) => {
                     let _ = ready_tx.send(Ok(()));
@@ -79,17 +78,7 @@ impl Player {
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
             drop(stream);
-        });
-        match ready_rx.recv() {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => {
-                let _ = thread.join();
-                return Err(e);
-            }
-            Err(_) => {
-                return Err(SallyError::Audio("readout thread died during startup".into()))
-            }
-        }
+        })?;
 
         Ok(Self {
             queue,

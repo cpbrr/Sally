@@ -7,9 +7,18 @@ import { useState } from "react";
 import { api } from "../api";
 import { UiLanguage } from "../i18n";
 import { useSally } from "../store";
+import { useShallow } from "zustand/react/shallow";
 
 export function SetupWizard() {
-  const { dict, uiLanguage, setUiLanguage, setConfig, setPhase } = useSally();
+  const { dict, uiLanguage, setUiLanguage, setConfig, setPhase } = useSally(
+    useShallow((s) => ({
+      dict: s.dict,
+      uiLanguage: s.uiLanguage,
+      setUiLanguage: s.setUiLanguage,
+      setConfig: s.setConfig,
+      setPhase: s.setPhase,
+    }))
+  );
   const [step, setStep] = useState(0);
   const [apiKey, setApiKey] = useState("");
   const [dataDir, setDataDir] = useState("");
