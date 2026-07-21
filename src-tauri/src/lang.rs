@@ -29,22 +29,29 @@ pub fn bcp47(display_name: &str) -> &'static str {
     }
 }
 
-/// Vietnamese-specific letters: đ/ơ/ư/ă/â-family plus tone-marked vowels
-/// that rarely appear together in other Latin orthographies.
+/// Vietnamese-specific letters: đ/ơ/ư/ă/â-family plus every tone-marked
+/// vowel. Must include the plain grave/acute/tilde tone marks (à á ã, è é,
+/// ì í, ò ó õ, ù ú ũ, ý) alongside the circumflex/breve/horn/hook/dot
+/// combinations — those plain-tone vowels are common in everyday words
+/// (là, có, và, má, nhà, vào) and their earlier omission meant short
+/// streaming fragments built only from such words detected as `latin`
+/// instead of `vi`, flip-flopping against fragments that happened to use a
+/// circumflex/breve/horn vowel and spuriously triggering the language-
+/// change-split logic mid-sentence.
 const VIETNAMESE_MARKERS: &str = "\
 đĐơƠưƯăĂ\
-ạảấầẩẫậắằẳẵặ\
-ẹẻẽếềểễệ\
-ỉĩị\
-ọỏốồổỗộớờởỡợ\
-ụủứừửữự\
-ỳỵỷỹ\
-ẠẢẤẦẨẪẬẮẰẲẴẶ\
-ẸẺẼẾỀỂỄỆ\
-ỈĨỊ\
-ỌỎỐỒỔỖỘỚỜỞỠỢ\
-ỤỦỨỪỬỮỰ\
-ỲỴỶỸ";
+àáảãạằắẳẵặầấẩẫậ\
+èéẻẽẹềếểễệ\
+ìíỉĩị\
+òóỏõọồốổỗộờớởỡợ\
+ùúủũụừứửữự\
+ỳýỷỹỵ\
+ÀÁẢÃẠẰẮẲẴẶẦẤẨẪẬ\
+ÈÉẺẼẸỀẾỂỄỆ\
+ÌÍỈĨỊ\
+ÒÓỎÕỌỒỐỔỖỘỜỚỞỠỢ\
+ÙÚỦŨỤỪỨỬỮỰ\
+ỲÝỶỸỴ";
 
 /// Detect the dominant script/language of a text fragment.
 /// Returns a BCP-47-ish tag, or `latin` when it is Latin script without
@@ -141,6 +148,23 @@ mod tests {
     fn detects_vietnamese() {
         assert_eq!(detect("Chúng ta sẽ họp vào thứ Sáu tới nhé"), Some("vi"));
         assert_eq!(detect("Được rồi, cảm ơn mọi người"), Some("vi"));
+    }
+
+    #[test]
+    fn detects_vietnamese_common_words_with_plain_tone_marks() {
+        // Regression: à/á/ã/è/é/ì/í/ò/ó/õ/ù/ú/ũ/ý were missing from
+        // VIETNAMESE_MARKERS, which only covered circumflex/breve/horn/
+        // hook/dot combinations. Short streaming fragments built only from
+        // everyday words using these plain tone marks fell through to
+        // "latin", flip-flopping against fragments using a circumflex/
+        // breve/horn vowel and spuriously splitting mid-sentence.
+        assert_eq!(detect("là"), Some("vi"));
+        assert_eq!(detect("có"), Some("vi"));
+        assert_eq!(detect("và"), Some("vi"));
+        assert_eq!(detect("má"), Some("vi"));
+        assert_eq!(detect("nhà"), Some("vi"));
+        assert_eq!(detect("vào"), Some("vi"));
+        assert_eq!(detect("đi đâu đó"), Some("vi"));
     }
 
     #[test]
