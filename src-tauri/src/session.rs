@@ -455,6 +455,26 @@ impl Meeting {
                     self.repeat_loop_muted = false;
                     self.rotate_pending = false;
                 }
+                // Speaker-agnostic alternative to speaker-change splitting:
+                // force a new line every `split_line_count` sentences, at
+                // whichever sentence boundary reaches it. 0 disables it.
+                if self.config.split_line_count > 0
+                    && self.assembler.open_ends_sentence()
+                    && self.assembler.open_sentence_count() >= self.config.split_line_count
+                {
+                    if let Some(sealed) = self.assembler.rotate_turn() {
+                        emit_sealed(
+                            &self.app,
+                            sealed,
+                            &mut self.store,
+                            &self.config,
+                            &mut self.sealed_entries,
+                        );
+                    }
+                    self.open_lang = None;
+                    self.repeat_loop_muted = false;
+                    self.rotate_pending = false;
+                }
                 self.last_fragment_ms = self.last_chunk_ms;
                 emit_partial(&self.app, &self.assembler);
             }

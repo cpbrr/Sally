@@ -158,8 +158,12 @@ select:focus, input:focus { outline: 1px solid var(--accent); }
   font-size: calc(13px * var(--text-scale, 1));
 }
 
-.panel-body::-webkit-scrollbar { width: 8px; }
-.panel-body::-webkit-scrollbar-thumb {
+.panel-body::-webkit-scrollbar,
+.sheet::-webkit-scrollbar {
+  width: 8px;
+}
+.panel-body::-webkit-scrollbar-thumb,
+.sheet::-webkit-scrollbar-thumb {
   background: var(--border);
   border-radius: 4px;
 }

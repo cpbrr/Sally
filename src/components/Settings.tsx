@@ -1,3 +1,4 @@
+import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Dispatch, SetStateAction, useEffect, useState } from "react";
 import { api, AudioDevices } from "../api";
@@ -28,7 +29,6 @@ type SettingsForm = {
   capture_app: string;
   live_model: string;
   cleanup_model: string;
-  save_audio: boolean;
   mac_capture_method: string;
 };
 
@@ -55,6 +55,12 @@ function AdvancedSettings({
   showKey: boolean;
   onToggleShowKey: () => void;
 }) {
+  const [version, setVersion] = useState("");
+
+  useEffect(() => {
+    getVersion().then(setVersion).catch(() => {});
+  }, []);
+
   return (
     <>
       <button className="btn advanced-toggle" onClick={onToggleAdvanced}>
@@ -172,6 +178,8 @@ function AdvancedSettings({
               </button>
             </div>
           </label>
+
+          {version && <p className="field-hint">{dict.version} {version}</p>}
         </>
       )}
     </>
@@ -204,7 +212,6 @@ export function Settings() {
     capture_app: config?.capture_app ?? "",
     live_model: config?.live_model ?? "",
     cleanup_model: config?.cleanup_model ?? "",
-    save_audio: config?.save_audio ?? true,
     mac_capture_method: config?.mac_capture_method ?? "auto",
   });
   const [error, setError] = useState("");
@@ -340,16 +347,6 @@ export function Settings() {
             </button>
           </div>
         </label>
-
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={form.save_audio}
-            onChange={(e) => setForm({ ...form, save_audio: e.target.checked })}
-          />
-          {dict.saveAudio}
-        </label>
-        <p className="field-hint">{dict.saveAudioHint}</p>
 
         <label className="check">
           <input

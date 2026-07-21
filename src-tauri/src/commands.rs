@@ -95,7 +95,6 @@ pub struct SettingsPayload {
     pub capture_app: Option<String>,
     pub mac_capture_method: Option<String>,
     pub readout_enabled: Option<bool>,
-    pub save_audio: Option<bool>,
 }
 
 /// Create or update configuration. Used by both first-run setup and the
@@ -156,9 +155,6 @@ pub async fn save_settings(
     }
     if let Some(v) = payload.readout_enabled {
         cfg.readout_enabled = v;
-    }
-    if let Some(v) = payload.save_audio {
-        cfg.save_audio = v;
     }
     cfg.save()?;
     write_data_dir_pointer(&app_config_dir(&app)?, &cfg.data_dir)?;

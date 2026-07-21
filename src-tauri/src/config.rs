@@ -25,12 +25,17 @@ const KEY_LIVE_API_VERSION: &str = "SALLY_LIVE_API_VERSION";
 const KEY_SPEAKER_SPLIT: &str = "SALLY_SPEAKER_SPLIT";
 const KEY_SEG_MODEL_URL: &str = "SALLY_SEGMENTATION_MODEL_URL";
 const KEY_SAVE_AUDIO: &str = "SALLY_SAVE_AUDIO";
+const KEY_SPLIT_LINE_COUNT: &str = "SALLY_SPLIT_LINE_COUNT";
 const KEY_READOUT_VOLUME: &str = "SALLY_READOUT_VOLUME";
 const KEY_MAC_CAPTURE_METHOD: &str = "SALLY_MAC_CAPTURE_METHOD";
 
 // The documented WebSocket endpoint for live translation is v1beta; the
 // session still auto-flips to v1alpha if setup keeps getting rejected.
 pub const DEFAULT_LIVE_API_VERSION: &str = "v1beta";
+
+/// Default for `split_line_count`: force a new line every this many
+/// sentences in the open entry, regardless of speaker.
+pub const DEFAULT_SPLIT_LINE_COUNT: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -67,6 +72,11 @@ pub struct AppConfig {
     /// so passages can be re-listened to during review. Local only; never
     /// uploaded. On by default; SALLY_SAVE_AUDIO=off disables it.
     pub save_audio: bool,
+    /// Force a new "line" (timeline entry) every this many sentences in
+    /// the open entry, regardless of speaker — a simpler alternative to
+    /// (or complement of) `speaker_split_enabled`. 0 disables it.
+    /// SALLY_SPLIT_LINE_COUNT; defaults to 3.
+    pub split_line_count: u32,
     /// Readout playback volume, 0.0–1.0.
     pub readout_volume: f32,
 }
@@ -92,6 +102,7 @@ impl AppConfig {
             speaker_split_enabled: true,
             segmentation_model_url: String::new(),
             save_audio: true,
+            split_line_count: DEFAULT_SPLIT_LINE_COUNT,
             readout_volume: 1.0,
         }
     }
@@ -158,6 +169,9 @@ impl AppConfig {
         cfg.speaker_split_enabled = get(KEY_SPEAKER_SPLIT) != "off";
         cfg.segmentation_model_url = get(KEY_SEG_MODEL_URL);
         cfg.save_audio = get(KEY_SAVE_AUDIO) != "off";
+        if let Ok(v) = get(KEY_SPLIT_LINE_COUNT).parse::<u32>() {
+            cfg.split_line_count = v;
+        }
         if let Ok(v) = get(KEY_READOUT_VOLUME).parse::<f32>() {
             cfg.readout_volume = v.clamp(0.0, 1.0);
         }
@@ -202,6 +216,10 @@ impl AppConfig {
             KEY_SAVE_AUDIO.into(),
             if self.save_audio { "on" } else { "off" }.into(),
         );
+        map.insert(
+            KEY_SPLIT_LINE_COUNT.into(),
+            self.split_line_count.to_string(),
+        );
         map.insert(KEY_READOUT_VOLUME.into(), format!("{}", self.readout_volume));
         // Legacy keys from removed features: swept from the file instead of
         // preserved as unknowns.
@@ -242,7 +260,6 @@ impl AppConfig {
             capture_app: self.capture_app.clone(),
             mac_capture_method: self.mac_capture_method.clone(),
             readout_enabled: self.readout_enabled,
-            save_audio: self.save_audio,
             readout_volume: self.readout_volume,
         }
     }
@@ -262,7 +279,6 @@ pub struct RedactedConfig {
     pub capture_app: String,
     pub mac_capture_method: String,
     pub readout_enabled: bool,
-    pub save_audio: bool,
     pub readout_volume: f32,
 }
 
@@ -351,6 +367,7 @@ mod tests {
         assert!(!cfg.readout_enabled);
         assert_eq!(cfg.live_api_version, DEFAULT_LIVE_API_VERSION);
         assert!(cfg.save_audio, "audio saving must default on");
+        assert_eq!(cfg.split_line_count, DEFAULT_SPLIT_LINE_COUNT);
     }
 
     /// Sets every field on `AppConfig` to a distinctive non-default value,
@@ -382,6 +399,7 @@ mod tests {
         cfg.speaker_split_enabled = false;
         cfg.segmentation_model_url = "https://example.com/model.bin".into();
         cfg.save_audio = false;
+        cfg.split_line_count = 7;
         cfg.readout_volume = 0.42;
 
         cfg.save().unwrap();
@@ -406,6 +424,7 @@ mod tests {
             "https://example.com/model.bin"
         );
         assert_eq!(reloaded.save_audio, false);
+        assert_eq!(reloaded.split_line_count, 7);
         assert_eq!(reloaded.readout_volume, 0.42);
 
         std::fs::remove_dir_all(&dir).ok();
