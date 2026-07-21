@@ -35,7 +35,12 @@ When a change is done and tested, run the full pipeline without asking:
 6. When CI is green, publish:
    `gh release edit vX.Y.Z --title "Sally vX.Y.Z" --notes-file <file> --draft=false --prerelease`
    ALWAYS `--prerelease`, NEVER `--latest` — the user promotes releases
-   manually.
+   manually. **Every subsequent `gh release edit` on that tag (e.g. a
+   later notes-only fix) must also re-pass `--prerelease`** — v0.17.1 and
+   v0.18.1 both silently flipped to a full release after a follow-up
+   `gh release edit ... --notes-file <file>` omitted it; caught and fixed
+   after the fact. Check `gh release view vX.Y.Z --json isPrerelease`
+   after any edit to that tag if in doubt.
 
 ## PR body format (reference: PR #15)
 
@@ -49,12 +54,35 @@ Claude-Session trailer as commits.
 - Title: `Sally vX.Y.Z` (exactly — past deviations were fixed manually).
 - Body, in order:
   1. One-sentence summary line (plain language, user-facing benefit).
-  2. `## Downloads` table:
-     `| Windows 11 x64 | Sally-windows-x64-portable.zip | Portable — unzip anywhere, run Sally.exe. |`
+  2. `## Downloads` table — **always include the header + separator row**,
+     even for a single-platform table (v0.14.0–v0.15.0 shipped without them:
+     GitHub silently renders a headerless table as raw pipe-text, not a
+     table — caught and fixed retroactively in v0.17.1):
+     ```
+     | Platform | File | Notes |
+     |---|---|---|
+     | Windows 11 x64 | Sally-windows-x64-portable.zip | Portable — unzip anywhere, run Sally.exe. |
+     | macOS 13+ Apple Silicon | Sally-macos-aarch64.dmg | Ad-hoc signed — right-click → Open on first launch, or `xattr -cr` if macOS calls it "damaged." |
+     ```
+     The macOS row only applies once the mac job has actually been
+     dispatched and its DMG attached to that release (mac is
+     manual-dispatch-only, see below) — if that happens *after* the notes
+     were first published, go back and add the row (v0.17.0/v0.17.1 shipped
+     without it, fixed retroactively same session).
   3. `## Why <previous version> failed` (or `## Why remove it` etc.) —
      honest plain-language account of the problem.
   4. `## What changed` — bold-led bullets, user-facing wording.
   5. Closing "Expected behavior" line where it applies.
+
+## macOS build (manual-dispatch only, not part of default ship pipeline)
+
+Tag-push only builds Windows. If the user asks for the mac build:
+`gh workflow run release.yml --ref main`, watch it, then
+`gh run download <run-id> -n sally-macos-aarch64 -D <dir>` and
+`gh release upload vX.Y.Z <dir>/Sally-macos-aarch64.dmg <dir>/Sally-macos-aarch64.dmg.sha256`
+onto the already-published release. Remember to add the macOS row to that
+release's notes per above — it's easy to attach the asset and forget the
+table.
 
 ## After shipping
 
@@ -85,3 +113,18 @@ Claude-Session trailer as commits.
   is always safe.
 - Design doc: `2026-07-17-sally-live-translation-design.md` (historical §7
   diarization sections are obsolete).
+- Readout has no language gate (removed v0.17.0): every remote (Meeting)
+  passage plays translated audio regardless of source language, source ==
+  target included. `echoTargetLanguage: true` in `gemini/live.rs` must stay
+  true — it's what makes Gemini produce audio for same-language passages
+  at all. Mic (You) speech is never read back translated, by design, not a
+  bug — it only ever reaches the transcript (`open_mic_dominated()` check
+  in `session.rs`'s Audio handler). The only other playback gate is
+  `repeat_loop_muted` (v0.17.1): Gemini's live-translate model has a known
+  server-side failure mode where it gets stuck verbatim-repeating a phrase
+  (seen on both the original transcript and the translation, most often
+  but not only when the target is Vietnamese) — `lang::has_repeat_loop()`
+  detects that specific signature and mutes for the rest of the turn. It
+  is a mitigation for one known failure shape, not a general fix; if
+  garbled/looping audio resurfaces without visible text repetition, this
+  won't catch it.

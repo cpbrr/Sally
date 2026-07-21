@@ -211,12 +211,17 @@ pub async fn list_audio_apps() -> Result<Vec<String>> {
     #[cfg(target_os = "macos")]
     {
         tokio::task::spawn_blocking(|| {
-            let tap_apps: Vec<String> = crate::audio::coreaudio_tap::list_audio_processes()
-                .into_iter()
-                .map(|p| p.bundle_id)
-                .collect();
+            // Dedup: an app with several audio-capable helper processes
+            // (e.g. Chrome, one Renderer per tab) resolves each of them to
+            // the same display name (see resolve_app_display_name) — only
+            // show it once.
+            let tap_apps: std::collections::BTreeSet<String> =
+                crate::audio::coreaudio_tap::list_audio_processes()
+                    .into_iter()
+                    .map(|p| p.name)
+                    .collect();
             if !tap_apps.is_empty() {
-                tap_apps
+                tap_apps.into_iter().collect()
             } else {
                 crate::audio::sck_capture::list_audio_apps()
             }
