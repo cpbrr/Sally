@@ -57,7 +57,7 @@ const en = {
   chooseFolder: "Choose folder…",
   setupPrivacyTitle: "Privacy disclosure",
   setupPrivacy:
-    "Meeting audio is sent to Google's Gemini service for transcription and translation. Optional cleanup sends transcript text to Google. With a free-tier API key, Google may use content to improve its products — free-tier keys may be unsuitable for confidential company meetings unless your company approved that use. When 'Save meeting audio' is on, a recording is kept only on this device and is never uploaded.",
+    "Meeting audio is sent to Google's Gemini service for transcription and translation. Optional cleanup sends transcript text to Google. With a free-tier API key, Google may use content to improve its products — free-tier keys may be unsuitable for confidential company meetings unless your company approved that use. A local recording of the meeting audio is also kept next to the transcript for review; it stays on this device and is never uploaded.",
   setupPrivacyAccept: "I understand and accept",
   setupPermissions: "Permissions",
   setupPermissionsHint:
@@ -122,11 +122,9 @@ const en = {
     "Pick the meeting app to capture only its audio. Sally's own read-aloud voice is then never captured, which removes echo. The app must be playing audio to appear in this list.",
   refresh: "Refresh",
   alwaysOnTopDefault: "Always on top by default",
-  saveAudio: "Save meeting audio",
-  saveAudioHint:
-    "Keeps a local WAV recording next to the transcript so you can re-listen during review. Stays on this device; never uploaded.",
   liveModel: "Live model",
   cleanupModel: "Cleanup model",
+  version: "Version",
   save: "Save",
   saved: "Saved",
   errorPrefix: "Error:",
@@ -192,7 +190,7 @@ const vi: typeof en = {
   chooseFolder: "Chọn thư mục…",
   setupPrivacyTitle: "Thông báo quyền riêng tư",
   setupPrivacy:
-    "Âm thanh cuộc họp được gửi đến dịch vụ Gemini của Google để phiên âm và dịch. Bước dọn bản ghi (tùy chọn) gửi văn bản đến Google. Với khóa API miễn phí, Google có thể dùng nội dung để cải thiện sản phẩm — khóa miễn phí có thể không phù hợp cho các cuộc họp bảo mật trừ khi công ty bạn đã chấp thuận. Khi bật 'Lưu âm thanh cuộc họp', bản ghi âm chỉ được lưu trên máy này và không bao giờ được tải lên.",
+    "Âm thanh cuộc họp được gửi đến dịch vụ Gemini của Google để phiên âm và dịch. Bước dọn bản ghi (tùy chọn) gửi văn bản đến Google. Với khóa API miễn phí, Google có thể dùng nội dung để cải thiện sản phẩm — khóa miễn phí có thể không phù hợp cho các cuộc họp bảo mật trừ khi công ty bạn đã chấp thuận. Bản ghi âm cuộc họp cũng được lưu cục bộ cạnh bản ghi chữ để xem lại; chỉ nằm trên máy này và không bao giờ được tải lên.",
   setupPrivacyAccept: "Tôi hiểu và đồng ý",
   setupPermissions: "Quyền truy cập",
   setupPermissionsHint:
@@ -254,11 +252,9 @@ const vi: typeof en = {
     "Chọn ứng dụng họp để chỉ thu âm thanh của nó. Giọng đọc bản dịch của Sally sẽ không bị thu lại, loại bỏ tiếng vọng. Ứng dụng phải đang phát âm thanh mới xuất hiện trong danh sách.",
   refresh: "Làm mới",
   alwaysOnTopDefault: "Luôn trên cùng theo mặc định",
-  saveAudio: "Lưu âm thanh cuộc họp",
-  saveAudioHint:
-    "Giữ bản ghi WAV cục bộ cạnh bản ghi chữ để nghe lại khi xem xét. Chỉ nằm trên máy này; không bao giờ tải lên.",
   liveModel: "Mô hình trực tiếp",
   cleanupModel: "Mô hình dọn bản ghi",
+  version: "Phiên bản",
   save: "Lưu",
   saved: "Đã lưu",
   errorPrefix: "Lỗi:",

@@ -96,25 +96,27 @@ export function TitleBar() {
       >
         {config?.readout_enabled ? <IconSpeakerOn /> : <IconSpeakerOff />}
       </button>
-      <div className="volume-wrap">
-        <button className="icon-btn" title={dict.readoutVolume}>
-          <IconVolume />
-        </button>
-        <div className="volume-slider-track">
-          <input
-            className="volume-slider"
-            type="range"
-            min={0}
-            max={100}
-            value={Math.round(volume * 100)}
-            title={dict.readoutVolume}
-            onChange={(e) => dragVolume(Number(e.target.value) / 100)}
-            onPointerUp={() => commitVolume(volume)}
-            onKeyUp={() => commitVolume(volume)}
-          />
-          <span className="volume-value">{Math.round(volume * 100)}%</span>
+      {config?.readout_enabled && (
+        <div className="volume-wrap">
+          <button className="icon-btn" title={dict.readoutVolume}>
+            <IconVolume />
+          </button>
+          <div className="volume-slider-track">
+            <input
+              className="volume-slider"
+              type="range"
+              min={0}
+              max={100}
+              value={Math.round(volume * 100)}
+              title={dict.readoutVolume}
+              onChange={(e) => dragVolume(Number(e.target.value) / 100)}
+              onPointerUp={() => commitVolume(volume)}
+              onKeyUp={() => commitVolume(volume)}
+            />
+            <span className="volume-value">{Math.round(volume * 100)}%</span>
+          </div>
         </div>
-      </div>
+      )}
       <button
         className={`icon-btn ${pinned ? "active" : ""}`}
         title={pinned ? dict.unpin : dict.pin}

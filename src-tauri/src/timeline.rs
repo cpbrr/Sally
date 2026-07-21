@@ -7,6 +7,8 @@
 
 use serde::Serialize;
 
+const SENTENCE_END: [char; 8] = ['.', '!', '?', '。', '！', '？', '…', '．'];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EntryKind {
@@ -134,12 +136,22 @@ impl Assembler {
     /// speaker's lagging tail words drain into their own entry instead of
     /// leaking into the next speaker's line.
     pub fn open_ends_sentence(&self) -> bool {
-        const SENTENCE_END: [char; 8] = ['.', '!', '?', '。', '！', '？', '…', '．'];
         self.open
             .as_ref()
             .and_then(|e| e.original.trim_end().chars().last())
             .map(|c| SENTENCE_END.contains(&c))
             .unwrap_or(false)
+    }
+
+    /// Count of sentence-ending punctuation marks in the open entry's
+    /// original text so far. Backs `SALLY_SPLIT_LINE_COUNT`: a simpler,
+    /// speaker-agnostic alternative to speaker-change splitting that just
+    /// forces a new line every N sentences.
+    pub fn open_sentence_count(&self) -> u32 {
+        self.open
+            .as_ref()
+            .map(|e| e.original.chars().filter(|c| SENTENCE_END.contains(c)).count() as u32)
+            .unwrap_or(0)
     }
 
     /// Whether the open entry is (so far) attributed to the microphone.
