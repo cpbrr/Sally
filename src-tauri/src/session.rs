@@ -228,6 +228,22 @@ struct Meeting {
 }
 
 impl Meeting {
+    /// Rotate the open entry into closing, routing future translation
+    /// fragments correctly: if the entry being closed was already in the
+    /// target language, Gemini's `echoTargetLanguage=false` setting means
+    /// it will never send a `Translated` event for it, so a translation
+    /// fragment arriving afterward must fall through to the entry that
+    /// opens next instead of being silently stranded on a closing entry
+    /// that will never claim it.
+    fn rotate_turn(&mut self) -> Option<crate::timeline::TimelineEntry> {
+        let target_code = crate::lang::bcp47(&self.config.target_language);
+        if self.open_lang == Some(target_code) {
+            self.assembler.rotate_turn_no_translation_expected()
+        } else {
+            self.assembler.rotate_turn()
+        }
+    }
+
     /// Process one raw audio frame from capture: mix/resample via the
     /// pipeline, feed the recorder/split-detector/live connection, and run
     /// the idle-turn-flush and long-turn-split checks. Only called when the
@@ -313,7 +329,7 @@ impl Meeting {
             // Long uninterrupted turn: split on a time boundary the
             // same way a speaker-change boundary would, so trailing
             // translation can still land in the closing entry.
-            if let Some(sealed) = self.assembler.rotate_turn() {
+            if let Some(sealed) = self.rotate_turn() {
                 emit_sealed(
                     &self.app,
                     sealed,
@@ -324,7 +340,7 @@ impl Meeting {
             }
             self.open_lang = None;
             self.rotate_pending = false;
-            emit_partial(&self.app, &self.assembler, &self.config);
+            emit_partial(&self.app, &self.assembler, &self.config, self.open_lang);
         }
     }
 
@@ -367,7 +383,7 @@ impl Meeting {
                 // speaker's text already ends at a sentence, so this
                 // fragment starts the new voice's entry.
                 if self.rotate_pending && self.assembler.open_ends_sentence() {
-                    if let Some(sealed) = self.assembler.rotate_turn() {
+                    if let Some(sealed) = self.rotate_turn() {
                         emit_sealed(
                             &self.app,
                             sealed,
@@ -385,7 +401,7 @@ impl Meeting {
                 // never triggers this.
                 if let (Some(f), Some(o)) = (frag_lang, self.open_lang) {
                     if f != o && self.assembler.open_original_len() >= MIN_SPLIT_CHARS {
-                        if let Some(sealed) = self.assembler.rotate_turn() {
+                        if let Some(sealed) = self.rotate_turn() {
                             emit_sealed(
                                 &self.app,
                                 sealed,
@@ -410,7 +426,7 @@ impl Meeting {
                         || self.assembler.open_original_len()
                             > self.pending_since_len + PENDING_SPLIT_MAX_EXTRA_CHARS)
                 {
-                    if let Some(sealed) = self.assembler.rotate_turn() {
+                    if let Some(sealed) = self.rotate_turn() {
                         emit_sealed(
                             &self.app,
                             sealed,
@@ -423,17 +439,22 @@ impl Meeting {
                     self.rotate_pending = false;
                 }
                 self.last_fragment_ms = self.last_chunk_ms;
-                emit_partial(&self.app, &self.assembler, &self.config);
+                emit_partial(&self.app, &self.assembler, &self.config, self.open_lang);
             }
             Some(LiveEvent::Translated(text)) => {
                 self.assembler.push_translated(&text, self.last_chunk_ms);
                 self.last_fragment_ms = self.last_chunk_ms;
-                emit_partial(&self.app, &self.assembler, &self.config);
+                emit_partial(&self.app, &self.assembler, &self.config, self.open_lang);
             }
             Some(LiveEvent::Audio(samples)) => {
                 if self.readout_enabled && !self.paused {
-                    let original = self.assembler.partial().map(|p| p.original).unwrap_or_default();
-                    let playable = self.gate.push_audio(samples, &original);
+                    // open_original_text(), not partial()'s blended view:
+                    // this audio belongs to the currently open entry, and
+                    // blending in an older, possibly different-language
+                    // closing entry would corrupt the readout gate's
+                    // language decision for it.
+                    let original = self.assembler.open_original_text();
+                    let playable = self.gate.push_audio(samples, original);
                     // Never read the user's own mic speech back to
                     // them translated — only remote (Meeting) turns
                     // qualify.
@@ -479,7 +500,7 @@ impl Meeting {
                 // Rotate instead of sealing immediately: the entry
                 // stays open one more turn so trailing translation
                 // fragments can land in it.
-                if let Some(sealed) = self.assembler.rotate_turn() {
+                if let Some(sealed) = self.rotate_turn() {
                     emit_sealed(
                         &self.app,
                         sealed,
@@ -860,11 +881,25 @@ fn append_and_emit(
     let _ = app.emit("sally://partial", json!(null));
 }
 
-fn emit_partial(app: &AppHandle, assembler: &Assembler, config: &AppConfig) {
+fn emit_partial(app: &AppHandle, assembler: &Assembler, config: &AppConfig, open_lang: Option<&'static str>) {
     if let Some(mut p) = assembler.partial() {
-        // Same target-language mirroring as emit_sealed, applied live so
-        // the translated panel doesn't sit empty until the turn seals.
-        mirror_if_already_target_language(&p.original, &mut p.translated, &config.target_language);
+        // Mirror only when nothing else has supplied a translation yet
+        // (never clobber a real translation Gemini already sent for the
+        // closing entry), and gate on the tracked language of the newest
+        // (open) fragment rather than re-detecting on `p.original` — that
+        // string is the closing entry's frozen text concatenated with the
+        // newly-open entry's text (partial() blends them so nothing
+        // disappears from the live view mid-transition), and detecting
+        // language on that blend can misclassify a genuinely
+        // different-language open entry as still being the closing
+        // entry's language.
+        if p.translated.is_empty()
+            && open_lang
+                .map(|l| l == crate::lang::bcp47(&config.target_language))
+                .unwrap_or(false)
+        {
+            p.translated = p.original.clone();
+        }
         let _ = app.emit("sally://partial", p);
     }
 }
