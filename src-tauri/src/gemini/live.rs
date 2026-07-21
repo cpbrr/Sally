@@ -85,13 +85,10 @@ pub async fn connect(
                 // That silence was the source of a whole bug class —
                 // client-side code had to guess which entries would never
                 // get a translation and route around them, and got it
-                // wrong when languages were mixed rapidly. Read-aloud
-                // suppression for target-language passages is a purely
-                // client-side decision (readout.rs's should_read_out,
-                // keyed on the ORIGINAL passage's detected language) and
-                // does not depend on this flag — Gemini can keep
-                // synthesizing audio for target-language passages; Sally
-                // simply never plays it.
+                // wrong when languages were mixed rapidly. Sally now plays
+                // every passage it produces (source == target included,
+                // e.g. Vietnamese dubbed into Vietnamese) — no client-side
+                // language gate anymore.
                 "translationConfig": {
                     "targetLanguageCode": target_code,
                     "echoTargetLanguage": true

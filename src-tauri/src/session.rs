@@ -9,7 +9,6 @@ use crate::audio::{capture, pipeline::Pipeline, playback::Player, recorder::WavR
 use crate::config::AppConfig;
 use crate::error::{Result, SallyError};
 use crate::gemini::live::{self, LiveEvent};
-use crate::readout::ReadoutGate;
 use crate::split::{self, SplitDetector};
 use crate::store::{MeetingStore, RecoveryJournal};
 use crate::timeline::Assembler;
@@ -192,17 +191,14 @@ struct Meeting {
     paused: bool,
     last_chunk_ms: u64,
     last_fragment_ms: u64,
-    /// Readout: translated audio plays only for passages whose source
-    /// language differs from the target (never Vietnamese-to-Vietnamese).
-    target_code: String,
+    /// Readout: translated audio plays for every remote (Meeting) passage,
+    /// regardless of source language — including source == target, so a
+    /// Vietnamese-to-Vietnamese "translation" is dubbed same as any other.
+    /// Mic (You) speech is never read back; it only ever reaches the raw
+    /// transcript.
     readout_enabled: bool,
     readout_volume: f32,
-    gate: ReadoutGate,
     player: Option<Player>,
-    /// Last moment readout audio was audible; original-transcription
-    /// fragments in this window that are already target-language are our own
-    /// played translation coming back through loopback, and are dropped.
-    last_playback_at: Option<Instant>,
     recorder: Option<WavRecorder>,
     /// Language of the currently open entry's original text, for splitting
     /// when the spoken language changes mid-stream. Only script-detectable
@@ -236,22 +232,14 @@ impl Meeting {
         self.pipeline.push(frame);
         while let Some(chunk) = self.pipeline.next_chunk() {
             self.last_chunk_ms = chunk.t_ms;
-            // While readout audio is playing, system audio also
-            // contains our own spoken translation (loopback). Audio
-            // still flows to Gemini uninterrupted — muting it made
-            // the whole pipeline stall until playback finished. The
-            // echo is neutralized downstream instead: original-
-            // language transcription fragments detected as
-            // target-language within the playback window are dropped
-            // (the Original-event echo-window check below) — this is
-            // the only line of defense now that Gemini translates
-            // every passage uniformly (echoTargetLanguage: true), so
-            // it also produces real output for our own played-back
-            // target-language audio if it loops back in.
+            // Selecting a specific app/tab as the capture source (per-app
+            // loopback on Windows, the Core Audio tap on macOS) means
+            // Sally's own readout output is structurally excluded from what
+            // gets captured — it belongs to a different process, not the
+            // selected app. Audio still flows to Gemini uninterrupted;
+            // muting it made the whole pipeline stall until playback
+            // finished.
             let readout_playing = self.player.as_mut().map(|p| p.is_active()).unwrap_or(false);
-            if readout_playing {
-                self.last_playback_at = Some(Instant::now());
-            }
             let record_err = self
                 .recorder
                 .as_mut()
@@ -289,13 +277,6 @@ impl Meeting {
         if self.last_fragment_ms > 0
             && self.last_chunk_ms.saturating_sub(self.last_fragment_ms) > TURN_IDLE_FLUSH_MS
         {
-            flush_turn_readout(
-                &mut self.readout_enabled,
-                &self.assembler,
-                &mut self.gate,
-                &mut self.player,
-                self.readout_volume,
-            );
             finalize_entry(
                 &self.app,
                 &mut self.assembler,
@@ -353,20 +334,7 @@ impl Meeting {
                 }
             }
             Some(LiveEvent::Original(text)) => {
-                // Drop our own readout echo: target-language
-                // fragments while (or just after) the translated
-                // voice was audible are the played translation
-                // coming back through loopback capture.
-                // Wide window: the echo's own transcription can trail
-                // the played audio by several seconds.
-                let echo_window = self
-                    .last_playback_at
-                    .map(|t| t.elapsed() < Duration::from_millis(4000))
-                    .unwrap_or(false);
                 let frag_lang = crate::lang::detect(&text);
-                if echo_window && frag_lang.map(|l| l == self.target_code).unwrap_or(false) {
-                    return;
-                }
                 // Deferred speaker-change split: the previous
                 // speaker's text already ends at a sentence, so this
                 // fragment starts the new voice's entry.
@@ -435,56 +403,21 @@ impl Meeting {
                 emit_partial(&self.app, &self.assembler);
             }
             Some(LiveEvent::Audio(samples)) => {
-                if self.readout_enabled && !self.paused {
-                    // open_original_text(), not partial()'s blended view:
-                    // this audio belongs to the currently open entry, and
-                    // blending in an older, possibly different-language
-                    // closing entry would corrupt the readout gate's
-                    // language decision for it.
-                    let original = self.assembler.open_original_text();
-                    let playable = self.gate.push_audio(samples, original);
-                    // Never read the user's own mic speech back to
-                    // them translated — only remote (Meeting) turns
-                    // qualify.
-                    //
-                    // macOS only: ScreenCaptureKit's per-application
-                    // audio filter is reportedly less exact than its
-                    // per-app *video* filter — audio capture can
-                    // still include more than the selected app, so
-                    // Sally's own readout can loop back in as "new"
-                    // remote speech even with a specific app
-                    // selected (this doesn't happen on Windows,
-                    // where per-app process-loopback is exact).
-                    // Suppress audio events that arrive while our
-                    // own readout was active in roughly the same
-                    // window the echo-window text filter already
-                    // uses, to stop the retranslate-and-repeat loop
-                    // this produces.
-                    #[cfg(target_os = "macos")]
-                    let self_echo_likely = self
-                        .last_playback_at
-                        .map(|t| t.elapsed() < Duration::from_millis(4000))
-                        .unwrap_or(false);
-                    #[cfg(not(target_os = "macos"))]
-                    let self_echo_likely = false;
-                    if !self.assembler.open_mic_dominated() && !self_echo_likely {
-                        play(
-                            &mut self.player,
-                            &mut self.readout_enabled,
-                            &playable,
-                            self.readout_volume,
-                        );
-                    }
+                // Never read the user's own mic speech back to them
+                // translated — only remote (Meeting) turns qualify. Beyond
+                // that, no gating: Gemini translates every passage
+                // uniformly (echoTargetLanguage: true), so this plays
+                // regardless of source language, including source == target.
+                if self.readout_enabled && !self.paused && !self.assembler.open_mic_dominated() {
+                    play(
+                        &mut self.player,
+                        &mut self.readout_enabled,
+                        &samples,
+                        self.readout_volume,
+                    );
                 }
             }
             Some(LiveEvent::TurnComplete) => {
-                flush_turn_readout(
-                    &mut self.readout_enabled,
-                    &self.assembler,
-                    &mut self.gate,
-                    &mut self.player,
-                    self.readout_volume,
-                );
                 // Rotate instead of sealing immediately: the entry
                 // stays open one more turn so trailing translation
                 // fragments can land in it.
@@ -568,7 +501,6 @@ async fn run_session(
 ) {
     let mut journal_tick = tokio::time::interval(JOURNAL_INTERVAL);
     let alive = Arc::new(AtomicBool::new(true));
-    let target_code = crate::lang::bcp47(&config.target_language).to_string();
 
     // Optional local recording: mixed 16 kHz chunks streamed to a WAV whose
     // positions line up with transcript timestamps. A recorder failure
@@ -634,9 +566,7 @@ async fn run_session(
         last_fragment_ms: 0,
         readout_enabled: config.readout_enabled,
         readout_volume: config.readout_volume,
-        gate: ReadoutGate::new(&target_code),
         player: None,
-        last_playback_at: None,
         recorder,
         open_lang: None,
         rotate_pending: false,
@@ -650,7 +580,6 @@ async fn run_session(
         reconnect_rx,
         gap_start_ms: None,
         alive: alive.clone(),
-        target_code,
         app,
         config,
         store,
@@ -862,28 +791,5 @@ fn append_and_emit(
 fn emit_partial(app: &AppHandle, assembler: &Assembler) {
     if let Some(p) = assembler.partial() {
         let _ = app.emit("sally://partial", p);
-    }
-}
-
-/// Flush the readout gate's trailing buffered audio for the ending turn and
-/// play it, unless the closing turn was mic-dominated (never read the
-/// user's own speech back to them).
-fn flush_turn_readout(
-    readout_enabled: &mut bool,
-    assembler: &Assembler,
-    gate: &mut ReadoutGate,
-    player: &mut Option<Player>,
-    readout_volume: f32,
-) {
-    if !*readout_enabled {
-        return;
-    }
-    // open_original_text(), not partial()'s blended view — see the same
-    // note in the Audio event handler: this decision is for the entry
-    // that's actually ending, and blending in an older closing entry's
-    // text would corrupt the language signal.
-    let tail = gate.end_turn(assembler.open_original_text());
-    if !assembler.open_mic_dominated() {
-        play(player, readout_enabled, &tail, readout_volume);
     }
 }

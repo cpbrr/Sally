@@ -48,13 +48,14 @@ accents and very rapid mid-sentence switches.
 ## Translated-voice readout
 
 A toggle (🔊 in the title bar, also in Settings, `SALLY_READOUT` in `.env`;
-off by default) speaks the translated voice aloud. Playback is gated per
-passage: speech already in the target language is never read out — with
-target Vietnamese, English and Japanese speech is spoken in Vietnamese while
-Vietnamese speech stays silent. Source language is classified locally from
-the original transcript (exact for Japanese/Korean/Chinese/Thai/Vietnamese
-scripts, coarse for plain-Latin languages). Use headphones: on speakers the
-readout is captured back by loopback and re-enters the pipeline.
+off by default) speaks the translated voice aloud for every remote (Meeting)
+passage — no per-language gating, so source == target (e.g. Vietnamese
+dubbed into Vietnamese) reads out same as any other pair. Your own mic
+speech is never read back translated; it only ever reaches the raw
+transcript. Capture is scoped to one selected app/tab (per-app loopback on
+Windows, the Core Audio tap on macOS), so Sally's own readout is
+structurally excluded from what it captures — no echo/loopback concern, and
+no headphones requirement.
 
 ## Platform status
 
