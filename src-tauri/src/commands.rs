@@ -189,9 +189,12 @@ pub struct AudioDevices {
 }
 
 /// Applications currently playing audio, for the per-app capture picker.
-/// Windows: any app with an active audio session. macOS: apps
-/// ScreenCaptureKit can see (needs Screen Recording permission; empty, not
-/// an error, until it's granted). Empty on other platforms.
+/// Windows: any app with an active audio session. macOS: prefers the Core
+/// Audio tap's process list (kAudioHardwarePropertyProcessObjectList) —
+/// permission-free, unlike ScreenCaptureKit — falling back to
+/// ScreenCaptureKit's enumeration (needs Screen Recording permission) only
+/// when the tap path finds nothing, e.g. macOS before 14.2 where that HAL
+/// surface doesn't exist. Empty on other platforms.
 #[tauri::command]
 pub async fn list_audio_apps() -> Result<Vec<String>> {
     #[cfg(windows)]
@@ -207,9 +210,19 @@ pub async fn list_audio_apps() -> Result<Vec<String>> {
     }
     #[cfg(target_os = "macos")]
     {
-        tokio::task::spawn_blocking(crate::audio::sck_capture::list_audio_apps)
-            .await
-            .map_err(|e| SallyError::Audio(e.to_string()))
+        tokio::task::spawn_blocking(|| {
+            let tap_apps: Vec<String> = crate::audio::coreaudio_tap::list_audio_processes()
+                .into_iter()
+                .map(|p| p.bundle_id)
+                .collect();
+            if !tap_apps.is_empty() {
+                tap_apps
+            } else {
+                crate::audio::sck_capture::list_audio_apps()
+            }
+        })
+        .await
+        .map_err(|e| SallyError::Audio(e.to_string()))
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     Ok(Vec::new())

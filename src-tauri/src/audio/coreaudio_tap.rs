@@ -1,12 +1,20 @@
 //! macOS system-audio capture via a Core Audio process tap (macOS 14.4+).
 //!
 //! This is the preferred no-virtual-device path on modern macOS: a
-//! `CATapDescription` taps every process's output except our own (so the
-//! translated-voice readout never re-enters the pipeline as an echo), the
-//! tap is wrapped in a private aggregate device alongside the real default
-//! output device, and audio arrives through a plain IOProc callback on that
-//! aggregate device. Older macOS (13.0-14.3) doesn't have this API at all;
-//! the caller falls back to ScreenCaptureKit, then a loopback device.
+//! `CATapDescription` taps either the whole system's output except our own
+//! (used when no specific app is selected — so the translated-voice readout
+//! never re-enters the pipeline as an echo) or one specific process (used
+//! when the user picks an app to capture), the tap is wrapped in a private
+//! aggregate device alongside the real default output device, and audio
+//! arrives through a plain IOProc callback on that aggregate device. Older
+//! macOS (13.0-14.3) doesn't have this API at all; the caller falls back to
+//! ScreenCaptureKit, then a loopback device.
+//!
+//! The per-app picker also lists candidate processes through this same HAL
+//! surface (`kAudioHardwarePropertyProcessObjectList` +
+//! `kAudioProcessProperty*`), not ScreenCaptureKit — this is the whole
+//! point of preferring the tap: none of it touches the Screen Recording
+//! permission ScreenCaptureKit requires.
 //!
 //! Every step here is unsafe CoreAudio/CoreFoundation FFI with no existing
 //! Rust wrapper to lean on (`objc2-core-audio` only ships raw bindings), and
@@ -25,13 +33,15 @@ use objc2_core_audio::{
     kAudioAggregateDeviceSubDeviceListKey, kAudioAggregateDeviceTapAutoStartKey,
     kAudioAggregateDeviceTapListKey, kAudioAggregateDeviceUIDKey, kAudioDevicePropertyDeviceUID,
     kAudioDevicePropertyNominalSampleRate, kAudioHardwarePropertyDefaultOutputDevice,
-    kAudioHardwarePropertyTranslatePIDToProcessObject, kAudioObjectPropertyElementMain,
-    kAudioObjectPropertyScopeGlobal, kAudioObjectSystemObject, kAudioObjectUnknown,
+    kAudioHardwarePropertyProcessObjectList, kAudioHardwarePropertyTranslatePIDToProcessObject,
+    kAudioObjectPropertyElementMain, kAudioObjectPropertyScopeGlobal, kAudioObjectSystemObject,
+    kAudioObjectUnknown, kAudioProcessPropertyBundleID, kAudioProcessPropertyIsRunningOutput,
     kAudioSubDeviceUIDKey, kAudioSubTapDriftCompensationKey, kAudioSubTapUIDKey,
     AudioDeviceCreateIOProcID, AudioDeviceDestroyIOProcID, AudioDeviceIOProcID, AudioDeviceStart,
     AudioDeviceStop, AudioHardwareCreateAggregateDevice, AudioHardwareCreateProcessTap,
-    AudioHardwareDestroyAggregateDevice, AudioHardwareDestroyProcessTap, AudioObjectGetPropertyData,
-    AudioObjectID, AudioObjectPropertyAddress, CATapDescription,
+    AudioHardwareDestroyAggregateDevice, AudioHardwareDestroyProcessTap,
+    AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize, AudioObjectID,
+    AudioObjectPropertyAddress, CATapDescription,
 };
 use objc2_core_audio_types::{AudioBufferList, AudioTimeStamp};
 use objc2_core_foundation::{
@@ -53,17 +63,23 @@ struct TapContext {
     sample_rate: u32,
 }
 
-/// Capture the whole system's audio (minus our own process) into `tx` until
-/// `stop` is set. Fails cleanly when the process-tap API rejects the
-/// request (permission denied, or the running OS predates 14.4 despite the
-/// caller's version check).
+/// Capture audio into `tx` until `stop` is set. `target_process` selects
+/// what gets tapped: `None` taps the whole system except our own process
+/// (the default, whole-device capture); `Some(process_id)` taps only that
+/// one process, for the per-app picker — `process_id` comes from
+/// `list_audio_processes()`/`resolve_process_by_bundle_id()`, re-resolved
+/// fresh at capture start since `AudioObjectID`s are session-specific.
+/// Fails cleanly when the process-tap API rejects the request (permission
+/// denied, or the running OS predates 14.4 despite the caller's version
+/// check).
 pub fn spawn_tap_capture(
     session_start: Instant,
     tx: mpsc::Sender<RawFrame>,
     stop: Arc<AtomicBool>,
+    target_process: Option<AudioObjectID>,
 ) -> Result<std::thread::JoinHandle<()>> {
     super::spawn_with_ready_signal("Core Audio tap", move |ready_tx| {
-        let setup = unsafe { setup_tap(session_start, tx, stop.clone()) };
+        let setup = unsafe { setup_tap(session_start, tx, stop.clone(), target_process) };
         let (tap_id, aggregate_id, io_proc_id, ctx) = match setup {
             Ok(h) => {
                 let _ = ready_tx.send(Ok(()));
@@ -87,6 +103,7 @@ unsafe fn setup_tap(
     session_start: Instant,
     tx: mpsc::Sender<RawFrame>,
     stop: Arc<AtomicBool>,
+    target_process: Option<AudioObjectID>,
 ) -> Result<SetupOutput> {
     let output_device_id: AudioObjectID = get_property(
         kAudioObjectSystemObject as u32,
@@ -98,12 +115,24 @@ unsafe fn setup_tap(
     let sample_rate: f64 = get_property(output_device_id, kAudioDevicePropertyNominalSampleRate)
         .unwrap_or(48_000.0);
 
-    let own_id = own_process_object_id()
-        .map_err(|e| SallyError::Audio(format!("own process object: {e}")))?;
-    let exclude_number = NSNumber::new_u32(own_id);
-    let exclude = NSArray::from_slice(&[&*exclude_number]);
     let alloc = CATapDescription::alloc();
-    let tap_desc = CATapDescription::initStereoGlobalTapButExcludeProcesses(alloc, &exclude);
+    let tap_desc = match target_process {
+        Some(process_id) => {
+            // Per-app capture: include only the selected process.
+            let include_number = NSNumber::new_u32(process_id);
+            let include = NSArray::from_slice(&[&*include_number]);
+            CATapDescription::initStereoMixdownOfProcesses(alloc, &include)
+        }
+        None => {
+            // Whole-system capture: everything except our own process, so
+            // the translated-voice readout never re-enters as an echo.
+            let own_id = own_process_object_id()
+                .map_err(|e| SallyError::Audio(format!("own process object: {e}")))?;
+            let exclude_number = NSNumber::new_u32(own_id);
+            let exclude = NSArray::from_slice(&[&*exclude_number]);
+            CATapDescription::initStereoGlobalTapButExcludeProcesses(alloc, &exclude)
+        }
+    };
     tap_desc.setPrivate(true);
 
     let mut tap_id: AudioObjectID = 0;
@@ -288,6 +317,117 @@ unsafe extern "C-unwind" fn io_proc(
         samples,
     });
     0
+}
+
+/// One audio-capable process, for the per-app capture picker. Enumerated
+/// entirely through the Core Audio HAL — unlike ScreenCaptureKit's
+/// enumeration, this never touches the Screen Recording permission.
+#[derive(Debug, Clone)]
+pub struct TapProcess {
+    pub object_id: AudioObjectID,
+    /// Bundle identifier (e.g. "com.google.Chrome"). The HAL exposes no
+    /// localized display name, only this and the PID, so the picker shows
+    /// the raw bundle ID rather than a prettified app name.
+    pub bundle_id: String,
+}
+
+/// Audio-capable processes Core Audio currently reports as producing
+/// output, for the per-app capture picker. Empty (not an error) if the HAL
+/// query fails — e.g. macOS predates this API (14.2+) — or nothing
+/// qualifies, matching the shape of the other platforms' pickers.
+pub fn list_audio_processes() -> Vec<TapProcess> {
+    unsafe { list_audio_processes_inner() }.unwrap_or_default()
+}
+
+/// Resolve a bundle identifier (as shown in the per-app picker) to its
+/// current Core Audio process object. `AudioObjectID`s are session-
+/// specific, so this re-enumerates fresh rather than reusing an ID cached
+/// from an earlier `list_audio_processes()` call — by the time the user
+/// starts a meeting, the process may have restarted.
+pub fn resolve_process_by_bundle_id(bundle_id: &str) -> Option<AudioObjectID> {
+    list_audio_processes()
+        .into_iter()
+        .find(|p| p.bundle_id == bundle_id)
+        .map(|p| p.object_id)
+}
+
+unsafe fn list_audio_processes_inner() -> Result<Vec<TapProcess>> {
+    let ids: Vec<AudioObjectID> = get_property_array(
+        kAudioObjectSystemObject as u32,
+        kAudioHardwarePropertyProcessObjectList,
+    )?;
+    let mut out = Vec::new();
+    for id in ids {
+        // Only processes currently producing output audio — matches the
+        // "apps with an active audio session" framing the other platform
+        // pickers use. A failed property read (rather than a real false)
+        // just means we can't confirm it, so skip it the same as false.
+        let is_running_output: u32 =
+            get_property(id, kAudioProcessPropertyIsRunningOutput).unwrap_or(0);
+        if is_running_output == 0 {
+            continue;
+        }
+        let Ok(bundle_id) = get_cfstring_property(id, kAudioProcessPropertyBundleID) else {
+            continue;
+        };
+        let bundle_id = bundle_id.to_string();
+        if bundle_id.is_empty() {
+            continue;
+        }
+        out.push(TapProcess {
+            object_id: id,
+            bundle_id,
+        });
+    }
+    Ok(out)
+}
+
+/// Like `get_property`, but for variable-length array properties
+/// (`kAudioHardwarePropertyProcessObjectList` is a `CFArray`-free plain
+/// `AudioObjectID[]`, sized by querying first) rather than a single
+/// fixed-size value.
+unsafe fn get_property_array<T: Copy>(object_id: AudioObjectID, selector: u32) -> Result<Vec<T>> {
+    let address = AudioObjectPropertyAddress {
+        mSelector: selector,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain,
+    };
+    let mut size: u32 = 0;
+    let status = AudioObjectGetPropertyDataSize(
+        object_id,
+        (&address).into(),
+        0,
+        std::ptr::null(),
+        (&mut size).into(),
+    );
+    if status != 0 {
+        return Err(SallyError::Audio(format!(
+            "AudioObjectGetPropertyDataSize(selector={selector:#x}) failed: OSStatus {status}"
+        )));
+    }
+    let count = size as usize / std::mem::size_of::<T>();
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    let mut buf: Vec<T> = Vec::with_capacity(count);
+    let out_ptr = NonNull::new(buf.as_mut_ptr() as *mut c_void)
+        .ok_or_else(|| SallyError::Audio("null property buffer".into()))?;
+    let mut actual_size = size;
+    let status = AudioObjectGetPropertyData(
+        object_id,
+        (&address).into(),
+        0,
+        std::ptr::null(),
+        (&mut actual_size).into(),
+        out_ptr,
+    );
+    if status != 0 {
+        return Err(SallyError::Audio(format!(
+            "AudioObjectGetPropertyData(selector={selector:#x}) failed: OSStatus {status}"
+        )));
+    }
+    buf.set_len((actual_size as usize / std::mem::size_of::<T>()).min(count));
+    Ok(buf)
 }
 
 unsafe fn get_property<T: Copy>(object_id: AudioObjectID, selector: u32) -> Result<T> {
