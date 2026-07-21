@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, formatTimestamp } from "../api";
 import { CornerTools } from "./CornerTools";
 import { IconDoc, IconRefresh, IconWarning } from "./Icons";
-import { isMac } from "../platform";
 import { useSally } from "../store";
 import { useShallow } from "zustand/react/shallow";
 
@@ -158,16 +158,29 @@ export function SessionBar() {
     setError("");
     setSourceChoice(config?.capture_app ?? "");
     setPickingSource(true);
-    // macOS: listing apps goes through ScreenCaptureKit, which triggers
-    // (or checks) the Screen Recording permission — a broad, privacy-
-    // sensitive grant not needed at all when capture ends up using the
-    // Core Audio tap or the whole system. Only fetch on demand (the
-    // refresh button) so picking "Entire System" never touches it.
-    // Windows has no such permission cost, so keep it eager there.
-    if (!isMac()) {
-      api.listAudioApps().then(setAudioApps).catch(() => {});
-    }
+    // macOS: listing prefers the Core Audio tap (permission-free) and only
+    // falls back to ScreenCaptureKit — which does need Screen Recording —
+    // when the tap finds nothing, so eager fetch is safe on both platforms.
+    api.listAudioApps().then(setAudioApps).catch(() => {});
   };
+
+  // If the tap fallback did need Screen Recording and the user just
+  // granted it in System Settings, they return to Sally by refocusing the
+  // window — refresh right then instead of waiting for a manual reload.
+  useEffect(() => {
+    if (!pickingSource) return;
+    let unlisten: (() => void) | undefined;
+    getCurrentWindow()
+      .onFocusChanged(({ payload: focused }) => {
+        if (focused) {
+          api.listAudioApps().then(setAudioApps).catch(() => {});
+        }
+      })
+      .then((un) => {
+        unlisten = un;
+      });
+    return () => unlisten?.();
+  }, [pickingSource]);
 
   const confirmSourceAndStart = async () => {
     setPickingSource(false);

@@ -36,7 +36,8 @@ use objc2_core_audio::{
     kAudioHardwarePropertyProcessObjectList, kAudioHardwarePropertyTranslatePIDToProcessObject,
     kAudioObjectPropertyElementMain, kAudioObjectPropertyScopeGlobal, kAudioObjectSystemObject,
     kAudioObjectUnknown, kAudioProcessPropertyBundleID, kAudioProcessPropertyIsRunningOutput,
-    kAudioSubDeviceUIDKey, kAudioSubTapDriftCompensationKey, kAudioSubTapUIDKey,
+    kAudioProcessPropertyPID, kAudioSubDeviceUIDKey, kAudioSubTapDriftCompensationKey,
+    kAudioSubTapUIDKey,
     AudioDeviceCreateIOProcID, AudioDeviceDestroyIOProcID, AudioDeviceIOProcID, AudioDeviceStart,
     AudioDeviceStop, AudioHardwareCreateAggregateDevice, AudioHardwareCreateProcessTap,
     AudioHardwareDestroyAggregateDevice, AudioHardwareDestroyProcessTap,
@@ -325,10 +326,19 @@ unsafe extern "C-unwind" fn io_proc(
 #[derive(Debug, Clone)]
 pub struct TapProcess {
     pub object_id: AudioObjectID,
-    /// Bundle identifier (e.g. "com.google.Chrome"). The HAL exposes no
-    /// localized display name, only this and the PID, so the picker shows
-    /// the raw bundle ID rather than a prettified app name.
+    /// Bundle identifier (e.g. "com.google.Chrome"), kept for logging —
+    /// not what the picker shows or matches on (see `name`).
     pub bundle_id: String,
+    /// Display name resolved from the process's executable path (see
+    /// `resolve_app_display_name`): the outermost `.app` bundle name,
+    /// falling back to the raw bundle ID if that resolution fails. Needed
+    /// because the actual *audio-producing* process for many apps is a
+    /// background helper, not the main app — Chrome's real output comes
+    /// from a process whose own bundle ID is "com.google.Chrome.helper"
+    /// (shared by every one of its GPU/Renderer helpers), which is a
+    /// confusing, low-level string to put in front of a user. Resolving by
+    /// path instead correctly attributes it to "Google Chrome".
+    pub name: String,
 }
 
 /// Audio-capable processes Core Audio currently reports as producing
@@ -339,15 +349,18 @@ pub fn list_audio_processes() -> Vec<TapProcess> {
     unsafe { list_audio_processes_inner() }.unwrap_or_default()
 }
 
-/// Resolve a bundle identifier (as shown in the per-app picker) to its
-/// current Core Audio process object. `AudioObjectID`s are session-
-/// specific, so this re-enumerates fresh rather than reusing an ID cached
-/// from an earlier `list_audio_processes()` call — by the time the user
-/// starts a meeting, the process may have restarted.
-pub fn resolve_process_by_bundle_id(bundle_id: &str) -> Option<AudioObjectID> {
+/// Resolve a display name (as shown in the per-app picker, from `name`
+/// above) to a current Core Audio process object producing its audio.
+/// `AudioObjectID`s are session-specific, so this re-enumerates fresh
+/// rather than reusing an ID cached from an earlier `list_audio_processes()`
+/// call — by the time the user starts a meeting, the process may have
+/// restarted. When an app has multiple audio-capable helper processes
+/// (e.g. several Chrome tabs each with their own Renderer), this picks
+/// whichever one Core Audio lists first; the others aren't captured.
+pub fn resolve_process_by_name(name: &str) -> Option<AudioObjectID> {
     list_audio_processes()
         .into_iter()
-        .find(|p| p.bundle_id == bundle_id)
+        .find(|p| p.name == name)
         .map(|p| p.object_id)
 }
 
@@ -374,12 +387,42 @@ unsafe fn list_audio_processes_inner() -> Result<Vec<TapProcess>> {
         if bundle_id.is_empty() {
             continue;
         }
+        let pid: i32 = get_property(id, kAudioProcessPropertyPID).unwrap_or(0);
+        let name = resolve_app_display_name(pid, &bundle_id);
         out.push(TapProcess {
             object_id: id,
             bundle_id,
+            name,
         });
     }
     Ok(out)
+}
+
+/// Resolve a PID to a human-readable app name via the outermost `.app`
+/// bundle in its executable path (`proc_pidpath`, standard libproc — no
+/// extra linking needed, part of libSystem). Falls back to `fallback`
+/// (the raw bundle ID) if the path can't be read or has no `.app`
+/// component (a plain Unix daemon, for instance).
+fn resolve_app_display_name(pid: i32, fallback: &str) -> String {
+    if pid <= 0 {
+        return fallback.to_string();
+    }
+    const PROC_PIDPATHINFO_MAXSIZE: usize = 4 * 1024;
+    let mut buf = vec![0u8; PROC_PIDPATHINFO_MAXSIZE];
+    let len = unsafe { proc_pidpath(pid, buf.as_mut_ptr() as *mut c_void, buf.len() as u32) };
+    if len <= 0 {
+        return fallback.to_string();
+    }
+    let path = String::from_utf8_lossy(&buf[..len as usize]);
+    path.split('/')
+        .find(|seg| seg.ends_with(".app"))
+        .map(|seg| seg.trim_end_matches(".app").to_string())
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+extern "C" {
+    // libproc — part of libSystem, always linked on macOS.
+    fn proc_pidpath(pid: i32, buffer: *mut c_void, buffersize: u32) -> i32;
 }
 
 /// Like `get_property`, but for variable-length array properties

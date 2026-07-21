@@ -278,7 +278,7 @@ fn spawn_macos_system_thread(
         // through to SCK if the target process can't be found this way
         // (stale selection, or it isn't visible to Core Audio for some
         // reason) or the tap itself fails to start.
-        match super::coreaudio_tap::resolve_process_by_bundle_id(&capture_app) {
+        match super::coreaudio_tap::resolve_process_by_name(&capture_app) {
             Some(process_id) => match super::coreaudio_tap::spawn_tap_capture(
                 session_start,
                 tx.clone(),
