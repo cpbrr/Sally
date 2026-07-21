@@ -21,6 +21,27 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::default())
         .setup(|app| {
+            // Speaker-change splitting's ONNX Runtime dependency uses
+            // load-dynamic on macOS (Cargo.toml) instead of build-time
+            // static linking, which broke for aarch64-apple-darwin on
+            // GitHub's macos-26 runner. The dylib ships as a bundled
+            // resource instead (tauri.macos.conf.json); load it explicitly
+            // before anything can call Session::builder(). A missing or
+            // failed load just disables speaker-split — same graceful
+            // fallback as when the segmentation model itself fails to
+            // download — never blocks startup.
+            #[cfg(target_os = "macos")]
+            if let Ok(resource_dir) = app.path().resource_dir() {
+                let dylib = resource_dir.join("onnxruntime").join("libonnxruntime.dylib");
+                if let Err(e) = ort::init_from(&dylib).map(|b| {
+                    b.commit();
+                }) {
+                    log::warn!(
+                        "onnxruntime dylib unavailable at {}, speaker-change splitting disabled: {e}",
+                        dylib.display()
+                    );
+                }
+            }
             // Load config through the data-dir pointer, if setup already ran.
             let state = app.state::<AppState>();
             if let Ok(dir) = app.path().app_config_dir() {
