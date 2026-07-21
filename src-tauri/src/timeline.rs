@@ -43,6 +43,16 @@ pub struct Assembler {
     next_index: u64,
     closing: Option<OpenEntry>,
     open: Option<OpenEntry>,
+    /// Whether the closing entry can still claim an incoming translation
+    /// fragment. Normally true (translation lags original by a few
+    /// seconds, so a fragment arriving while an entry is closing belongs to
+    /// it) — but false when the caller already knows Gemini will never
+    /// translate the closing entry at all (e.g. it was already in the
+    /// target language, so `echoTargetLanguage=false` keeps the model
+    /// silent for it). Without this, every later translation fragment —
+    /// meant for the entry that opened after it — would be silently
+    /// swallowed by a closing entry that will never claim it.
+    closing_awaits_translation: bool,
     /// Fraction of *speech-active* chunks with mic energy needed to
     /// attribute a turn to `You`. Measured against chunks where anyone was
     /// speaking, so long silences no longer dilute the ratio (which used to
@@ -65,6 +75,7 @@ impl Assembler {
             next_index: 0,
             closing: None,
             open: None,
+            closing_awaits_translation: true,
             mic_attribution_threshold: 0.5,
         }
     }
@@ -87,15 +98,29 @@ impl Assembler {
     }
 
     /// Translation fragments belong to the oldest unfinished entry: the
-    /// model translates a passage seconds after transcribing it.
+    /// model translates a passage seconds after transcribing it. Skipped
+    /// when the closing entry is already known to never receive one (see
+    /// `closing_awaits_translation`), so the fragment falls through to the
+    /// open entry it actually belongs to instead of being stranded.
     pub fn push_translated(&mut self, text: &str, t_ms: u64) {
-        if let Some(e) = self.closing.as_mut() {
-            e.translated.push_str(text);
-            return;
+        if self.closing_awaits_translation {
+            if let Some(e) = self.closing.as_mut() {
+                e.translated.push_str(text);
+                return;
+            }
         }
         let e = self.open_mut(t_ms);
         e.translated.push_str(text);
         e.last_ms = e.last_ms.max(t_ms);
+    }
+
+    /// Original text accumulated in the currently open entry only — unlike
+    /// `partial()`, this does not include the closing entry's frozen text.
+    /// For decisions that must apply to the newest speech alone (readout
+    /// gating, target-language mirroring), blending in an older, possibly
+    /// different-language closing entry would corrupt the language signal.
+    pub fn open_original_text(&self) -> &str {
+        self.open.as_ref().map(|e| e.original.as_str()).unwrap_or("")
     }
 
     /// Original text accumulated in the currently open entry.
@@ -142,7 +167,20 @@ impl Assembler {
     pub fn rotate_turn(&mut self) -> Option<TimelineEntry> {
         let finished = self.closing.take().and_then(|e| self.seal_entry(e));
         self.closing = self.open.take();
+        self.closing_awaits_translation = true;
         finished
+    }
+
+    /// Same as `rotate_turn`, but for when the caller already knows the
+    /// entry being closed will never get a Gemini translation (it was
+    /// already in the target language, so `echoTargetLanguage=false` keeps
+    /// the model silent for it). Marks the new closing entry as not
+    /// expecting one, so `push_translated` routes the next fragment to the
+    /// entry that opens after it instead of stranding it here.
+    pub fn rotate_turn_no_translation_expected(&mut self) -> Option<TimelineEntry> {
+        let out = self.rotate_turn();
+        self.closing_awaits_translation = false;
+        out
     }
 
     /// Speech-activity signal from the pipeline, once per mixed chunk.
@@ -319,6 +357,42 @@ mod tests {
         assert_eq!(entries[0].translated, "bản dịch của người一");
         assert_eq!(entries[1].original, "second speaker words");
         assert_eq!(entries[1].translated, "");
+    }
+
+    #[test]
+    fn no_translation_expected_routes_next_fragment_to_new_open() {
+        // Regression: a passage already in the target language (Gemini
+        // stays silent for it, per echoTargetLanguage=false) must not
+        // strand the next real translation fragment — that fragment
+        // belongs to whatever opened after it.
+        let mut a = Assembler::new();
+        a.push_original("đã rồi nhé", 1000);
+        let done = a.rotate_turn_no_translation_expected();
+        assert!(done.is_none(), "nothing was closing yet");
+        a.push_original("switching to english now", 3000);
+        a.push_translated("bản dịch tiếng Anh", 3200);
+        let entries = a.finalize_turn();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].original, "đã rồi nhé");
+        assert_eq!(
+            entries[0].translated, "",
+            "closing entry never claims a translation Gemini will never send"
+        );
+        assert_eq!(entries[1].original, "switching to english now");
+        assert_eq!(
+            entries[1].translated, "bản dịch tiếng Anh",
+            "translation correctly falls through to the entry it belongs to"
+        );
+    }
+
+    #[test]
+    fn open_original_text_excludes_closing() {
+        let mut a = Assembler::new();
+        a.push_original("frozen closing text", 1000);
+        assert!(a.rotate_turn().is_none());
+        assert_eq!(a.open_original_text(), "");
+        a.push_original("new open text", 3000);
+        assert_eq!(a.open_original_text(), "new open text");
     }
 
     #[test]
