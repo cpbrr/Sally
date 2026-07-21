@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, formatTimestamp } from "../api";
 import { CornerTools } from "./CornerTools";
 import { IconDoc, IconRefresh, IconWarning } from "./Icons";
+import { isMac } from "../platform";
 import { useSally } from "../store";
 import { useShallow } from "zustand/react/shallow";
 
@@ -122,7 +123,15 @@ export function SessionBar() {
     setError("");
     setSourceChoice(config?.capture_app ?? "");
     setPickingSource(true);
-    api.listAudioApps().then(setAudioApps).catch(() => {});
+    // macOS: listing apps goes through ScreenCaptureKit, which triggers
+    // (or checks) the Screen Recording permission — a broad, privacy-
+    // sensitive grant not needed at all when capture ends up using the
+    // Core Audio tap or the whole system. Only fetch on demand (the
+    // refresh button) so picking "Entire System" never touches it.
+    // Windows has no such permission cost, so keep it eager there.
+    if (!isMac()) {
+      api.listAudioApps().then(setAudioApps).catch(() => {});
+    }
   };
 
   const confirmSourceAndStart = async () => {

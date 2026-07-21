@@ -79,15 +79,22 @@ pub async fn connect(
             "model": format!("models/{model}"),
             "generationConfig": {
                 "responseModalities": ["AUDIO"],
-                // echoTargetLanguage false: the model stays silent for
-                // input already in the target language. This kills the
-                // readout feedback cascade at the source (our own played
-                // translation is target-language, so it triggers no new
-                // audio), and Sally fills the translation panel client-side
-                // for passages already in the target language.
+                // echoTargetLanguage true: the model translates (echoes)
+                // every passage uniformly, including ones already in the
+                // target language, instead of silently skipping them.
+                // That silence was the source of a whole bug class —
+                // client-side code had to guess which entries would never
+                // get a translation and route around them, and got it
+                // wrong when languages were mixed rapidly. Read-aloud
+                // suppression for target-language passages is a purely
+                // client-side decision (readout.rs's should_read_out,
+                // keyed on the ORIGINAL passage's detected language) and
+                // does not depend on this flag — Gemini can keep
+                // synthesizing audio for target-language passages; Sally
+                // simply never plays it.
                 "translationConfig": {
                     "targetLanguageCode": target_code,
-                    "echoTargetLanguage": false
+                    "echoTargetLanguage": true
                 }
             },
             "inputAudioTranscription": {},
