@@ -34,6 +34,27 @@ async fn require_config(state: &State<'_, AppState>) -> Result<AppConfig> {
         .ok_or_else(|| SallyError::Config("setup not completed".into()))
 }
 
+/// Lock the config, apply `mutate` to it, optionally persist, and return the
+/// redacted copy. Shared by the single-field mid-meeting setters
+/// (`set_readout`, `set_readout_volume`); `save_settings` has a genuinely
+/// different shape (creates a new config when none exists) and is not
+/// folded in here.
+async fn mutate_config(
+    state: &State<'_, AppState>,
+    persist: bool,
+    mutate: impl FnOnce(&mut AppConfig),
+) -> Result<RedactedConfig> {
+    let mut guard = state.config.lock().await;
+    let cfg = guard
+        .as_mut()
+        .ok_or_else(|| SallyError::Config("setup not completed".into()))?;
+    mutate(cfg);
+    if persist {
+        cfg.save()?;
+    }
+    Ok(cfg.redacted())
+}
+
 #[derive(Serialize)]
 pub struct BootInfo {
     pub config: Option<RedactedConfig>,
@@ -279,15 +300,7 @@ pub async fn pause_meeting(state: State<'_, AppState>) -> Result<()> {
 /// that differ from the target are read aloud.
 #[tauri::command]
 pub async fn set_readout(state: State<'_, AppState>, enabled: bool) -> Result<RedactedConfig> {
-    let redacted = {
-        let mut guard = state.config.lock().await;
-        let cfg = guard
-            .as_mut()
-            .ok_or_else(|| SallyError::Config("setup not completed".into()))?;
-        cfg.readout_enabled = enabled;
-        cfg.save()?;
-        cfg.redacted()
-    };
+    let redacted = mutate_config(&state, true, |cfg| cfg.readout_enabled = enabled).await?;
     // Forward to the running session, if any; no meeting running is fine.
     let guard = state.session.lock().await;
     if let Some(session) = guard.as_ref() {
@@ -311,17 +324,7 @@ pub async fn set_readout_volume(
     persist: bool,
 ) -> Result<RedactedConfig> {
     let clamped = volume.clamp(0.0, 1.0);
-    let redacted = {
-        let mut guard = state.config.lock().await;
-        let cfg = guard
-            .as_mut()
-            .ok_or_else(|| SallyError::Config("setup not completed".into()))?;
-        cfg.readout_volume = clamped;
-        if persist {
-            cfg.save()?;
-        }
-        cfg.redacted()
-    };
+    let redacted = mutate_config(&state, persist, |cfg| cfg.readout_volume = clamped).await?;
     let guard = state.session.lock().await;
     if let Some(session) = guard.as_ref() {
         let _ = session
@@ -357,11 +360,16 @@ fn review_info(review: &ReviewData) -> ReviewInfo {
 /// review audio player, parsed from the last opened meeting's raw file.
 #[tauri::command]
 pub async fn meeting_chunks(state: State<'_, AppState>) -> Result<Vec<crate::store::TranscriptChunk>> {
-    let guard = state.last_meeting.lock().await;
-    let review = guard
-        .as_ref()
-        .ok_or_else(|| SallyError::Session("no meeting open for review".into()))?;
-    let text = std::fs::read_to_string(review.store.raw_path())?;
+    let raw_path = {
+        let guard = state.last_meeting.lock().await;
+        let review = guard
+            .as_ref()
+            .ok_or_else(|| SallyError::Session("no meeting open for review".into()))?;
+        review.store.raw_path().to_path_buf()
+    };
+    let text = tokio::task::spawn_blocking(move || std::fs::read_to_string(raw_path))
+        .await
+        .map_err(|e| SallyError::Session(format!("blocking task failed: {e}")))??;
     Ok(crate::store::parse_transcript_chunks(&text))
 }
 
@@ -405,47 +413,53 @@ pub struct MeetingFile {
 pub async fn list_meetings(state: State<'_, AppState>) -> Result<Vec<MeetingFile>> {
     let cfg = require_config(&state).await?;
     let raw_dir = cfg.meetings_dir().join("raw");
-    let Ok(entries) = std::fs::read_dir(&raw_dir) else {
-        return Ok(Vec::new());
-    };
-    let mut files: Vec<(std::time::SystemTime, MeetingFile)> = entries
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            let name = e.file_name().to_string_lossy().into_owned();
-            name.ends_with(".md") && !name.ends_with("-no-timestamps.md")
-        })
-        .map(|e| {
-            let modified = e
-                .metadata()
-                .and_then(|m| m.modified())
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-            let path = e.path();
-            let name = path
-                .file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            (
-                modified,
-                MeetingFile {
-                    name,
-                    path: path.to_string_lossy().into_owned(),
-                },
-            )
-        })
-        .collect();
-    files.sort_by(|a, b| b.0.cmp(&a.0));
-    Ok(files.into_iter().map(|(_, f)| f).collect())
+    tokio::task::spawn_blocking(move || {
+        let Ok(entries) = std::fs::read_dir(&raw_dir) else {
+            return Vec::new();
+        };
+        let mut files: Vec<(std::time::SystemTime, MeetingFile)> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                name.ends_with(".md") && !name.ends_with("-no-timestamps.md")
+            })
+            .map(|e| {
+                let modified = e
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                let path = e.path();
+                let name = path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                (
+                    modified,
+                    MeetingFile {
+                        name,
+                        path: path.to_string_lossy().into_owned(),
+                    },
+                )
+            })
+            .collect();
+        files.sort_by(|a, b| b.0.cmp(&a.0));
+        files.into_iter().map(|(_, f)| f).collect()
+    })
+    .await
+    .map_err(|e| SallyError::Session(format!("blocking task failed: {e}")))
 }
 
 /// Open a past meeting's raw transcript for processing.
 #[tauri::command]
 pub async fn open_meeting(state: State<'_, AppState>, raw_path: String) -> Result<ReviewInfo> {
     let cfg = require_config(&state).await?;
-    let store = MeetingStore::attach(
-        cfg.meetings_dir(),
-        cfg.recovery_dir(),
-        PathBuf::from(&raw_path),
-    )?;
+    let meetings_dir = cfg.meetings_dir();
+    let recovery_dir = cfg.recovery_dir();
+    let store = tokio::task::spawn_blocking(move || {
+        MeetingStore::attach(meetings_dir, recovery_dir, PathBuf::from(&raw_path))
+    })
+    .await
+    .map_err(|e| SallyError::Session(format!("blocking task failed: {e}")))??;
     let review = ReviewData { store };
     let info = review_info(&review);
     *state.last_meeting.lock().await = Some(review);
@@ -458,26 +472,45 @@ pub async fn apply_review(
     state: State<'_, AppState>,
     meeting_title: Option<String>,
 ) -> Result<ReviewInfo> {
-    let mut guard = state.last_meeting.lock().await;
-    let review = guard
-        .as_mut()
-        .ok_or_else(|| SallyError::Session("no finished meeting to review".into()))?;
-    if let Some(title) = meeting_title {
-        if !title.trim().is_empty() {
-            review.store.rename_meeting(&title)?;
-        }
-    }
-    Ok(review_info(review))
+    let review = {
+        let mut guard = state.last_meeting.lock().await;
+        guard
+            .take()
+            .ok_or_else(|| SallyError::Session("no finished meeting to review".into()))?
+    };
+    let (review, rename_result) = tokio::task::spawn_blocking(move || {
+        let mut review = review;
+        let result = match &meeting_title {
+            Some(title) if !title.trim().is_empty() => review.store.rename_meeting(title),
+            _ => Ok(()),
+        };
+        (review, result)
+    })
+    .await
+    .map_err(|e| SallyError::Session(format!("blocking task failed: {e}")))?;
+    let info = review_info(&review);
+    *state.last_meeting.lock().await = Some(review);
+    rename_result?;
+    Ok(info)
 }
 
 /// Timestamp-free copy; raw file untouched (design §2).
 #[tauri::command]
 pub async fn export_without_timestamps(state: State<'_, AppState>) -> Result<String> {
-    let guard = state.last_meeting.lock().await;
-    let review = guard
-        .as_ref()
-        .ok_or_else(|| SallyError::Session("no finished meeting".into()))?;
-    let path = review.store.export_without_timestamps()?;
+    let review = {
+        let mut guard = state.last_meeting.lock().await;
+        guard
+            .take()
+            .ok_or_else(|| SallyError::Session("no finished meeting".into()))?
+    };
+    let (review, result) = tokio::task::spawn_blocking(move || {
+        let result = review.store.export_without_timestamps();
+        (review, result)
+    })
+    .await
+    .map_err(|e| SallyError::Session(format!("blocking task failed: {e}")))?;
+    *state.last_meeting.lock().await = Some(review);
+    let path = result?;
     Ok(path.to_string_lossy().into_owned())
 }
 
@@ -490,21 +523,23 @@ pub async fn clean_and_summarize(
     include_original: bool,
 ) -> Result<String> {
     let cfg = require_config(&state).await?;
-    let (raw_text, polished_path, title) = {
+    let (raw_path, polished_path) = {
         let guard = state.last_meeting.lock().await;
         let review = guard
             .as_ref()
             .ok_or_else(|| SallyError::Session("no finished meeting".into()))?;
-        let text = std::fs::read_to_string(review.store.raw_path())?;
-        let title = text
-            .lines()
-            .next()
-            .unwrap_or("# Meeting")
-            .trim_start_matches('#')
-            .trim()
-            .to_string();
-        (text, review.store.polished_path(), title)
+        (review.store.raw_path().to_path_buf(), review.store.polished_path())
     };
+    let raw_text = tokio::task::spawn_blocking(move || std::fs::read_to_string(raw_path))
+        .await
+        .map_err(|e| SallyError::Session(format!("blocking task failed: {e}")))??;
+    let title = raw_text
+        .lines()
+        .next()
+        .unwrap_or("# Meeting")
+        .trim_start_matches('#')
+        .trim()
+        .to_string();
 
     let client = CleanupClient::new(cfg.api_key.clone(), cfg.cleanup_model.clone());
     let sections = split_sections(&raw_text, SECTION_BUDGET);
@@ -539,16 +574,25 @@ pub async fn clean_and_summarize(
 
     // Publish atomically only after all stages succeeded (design §9).
     let tmp = polished_path.with_extension("md.tmp");
-    std::fs::write(&tmp, polished)?;
-    std::fs::rename(&tmp, &polished_path)?;
-    Ok(polished_path.to_string_lossy().into_owned())
+    let result_path = polished_path.clone();
+    tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+        std::fs::write(&tmp, polished)?;
+        std::fs::rename(&tmp, &polished_path)?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| SallyError::Session(format!("blocking task failed: {e}")))??;
+    Ok(result_path.to_string_lossy().into_owned())
 }
 
 /// Recover interrupted meetings from journals into Markdown (design §8.2).
 #[tauri::command]
 pub async fn recover_meetings(state: State<'_, AppState>) -> Result<Vec<String>> {
     let cfg = require_config(&state).await?;
-    let recovered = MeetingStore::recover(&cfg.recovery_dir())?;
+    let recovery_dir = cfg.recovery_dir();
+    let recovered = tokio::task::spawn_blocking(move || MeetingStore::recover(&recovery_dir))
+        .await
+        .map_err(|e| SallyError::Session(format!("blocking task failed: {e}")))??;
     Ok(recovered
         .into_iter()
         .map(|p| p.to_string_lossy().into_owned())

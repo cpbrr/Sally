@@ -12,7 +12,7 @@ const TEXT_SCALE_MAX = 2.0;
 const TEXT_SCALE_STEP = 0.1;
 
 export function CornerTools() {
-  const { dict } = useSally();
+  const dict = useSally((s) => s.dict);
   const [textScale, setTextScale] = useState(() => {
     const saved = Number(localStorage.getItem("sally.textscale"));
     return saved >= TEXT_SCALE_MIN && saved <= TEXT_SCALE_MAX ? saved : 1;

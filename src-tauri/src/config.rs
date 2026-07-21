@@ -352,4 +352,62 @@ mod tests {
         assert_eq!(cfg.live_api_version, DEFAULT_LIVE_API_VERSION);
         assert!(cfg.save_audio, "audio saving must default on");
     }
+
+    /// Sets every field on `AppConfig` to a distinctive non-default value,
+    /// round-trips through `save()` + `load()`, and asserts every field
+    /// survived. This is the safety net for the hand-rolled 4-touch-point
+    /// pattern (struct field / KEY_* constant / load() line / save() line):
+    /// if a future field is ever added without wiring up its load()/save()
+    /// lines, this test fails immediately instead of the app silently
+    /// dropping that setting on every roundtrip.
+    #[test]
+    fn all_fields_roundtrip_through_save_and_load() {
+        let dir = std::env::temp_dir().join(format!("sally-cfg-all-fields-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut cfg = AppConfig::new(dir.clone());
+        cfg.api_key = "test-api-key-123".into();
+        cfg.live_model = "test-live-model-x".into();
+        cfg.cleanup_model = "test-cleanup-model-y".into();
+        cfg.target_language = "Klingon".into();
+        cfg.ui_language = "fr".into();
+        cfg.always_on_top = true;
+        cfg.mic_device = "Test Microphone".into();
+        cfg.system_device = "Test System Device".into();
+        cfg.capture_app = "TestApp.exe".into();
+        cfg.mac_capture_method = "screencapturekit".into();
+        cfg.readout_enabled = true;
+        cfg.live_api_version = "v1alpha".into();
+        cfg.speaker_split_enabled = false;
+        cfg.segmentation_model_url = "https://example.com/model.bin".into();
+        cfg.save_audio = false;
+        cfg.readout_volume = 0.42;
+
+        cfg.save().unwrap();
+        let reloaded = AppConfig::load(dir.clone()).unwrap();
+
+        assert_eq!(reloaded.data_dir, dir);
+        assert_eq!(reloaded.api_key, "test-api-key-123");
+        assert_eq!(reloaded.live_model, "test-live-model-x");
+        assert_eq!(reloaded.cleanup_model, "test-cleanup-model-y");
+        assert_eq!(reloaded.target_language, "Klingon");
+        assert_eq!(reloaded.ui_language, "fr");
+        assert_eq!(reloaded.always_on_top, true);
+        assert_eq!(reloaded.mic_device, "Test Microphone");
+        assert_eq!(reloaded.system_device, "Test System Device");
+        assert_eq!(reloaded.capture_app, "TestApp.exe");
+        assert_eq!(reloaded.mac_capture_method, "screencapturekit");
+        assert_eq!(reloaded.readout_enabled, true);
+        assert_eq!(reloaded.live_api_version, "v1alpha");
+        assert_eq!(reloaded.speaker_split_enabled, false);
+        assert_eq!(
+            reloaded.segmentation_model_url,
+            "https://example.com/model.bin"
+        );
+        assert_eq!(reloaded.save_audio, false);
+        assert_eq!(reloaded.readout_volume, 0.42);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

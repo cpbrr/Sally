@@ -121,8 +121,7 @@ pub fn spawn_app_capture(
     tx: mpsc::Sender<RawFrame>,
     stop: Arc<AtomicBool>,
 ) -> Result<std::thread::JoinHandle<()>> {
-    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<()>>();
-    let handle = std::thread::spawn(move || {
+    super::spawn_with_ready_signal("per-app capture", move |ready_tx| {
         let _ = wasapi::initialize_mta();
         let result = (|| -> std::result::Result<
             (wasapi::AudioClient, wasapi::Handle, wasapi::AudioCaptureClient),
@@ -190,16 +189,5 @@ pub fn spawn_app_capture(
             });
         }
         let _ = client.stop_stream();
-    });
-
-    match ready_rx.recv() {
-        Ok(Ok(())) => Ok(handle),
-        Ok(Err(e)) => {
-            let _ = handle.join();
-            Err(e)
-        }
-        Err(_) => Err(SallyError::Audio(
-            "per-app capture thread died during startup".into(),
-        )),
-    }
+    })
 }

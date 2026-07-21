@@ -12,6 +12,7 @@ import {
   IconVolume,
 } from "./Icons";
 import { useSally } from "../store";
+import { useShallow } from "zustand/react/shallow";
 
 const STATUS_KEYS: Record<string, string> = {
   connecting: "statusConnecting",
@@ -25,7 +26,16 @@ const STATUS_KEYS: Record<string, string> = {
 
 export function TitleBar() {
   const { dict, status, config, setConfig, showSettings, setShowSettings } =
-    useSally();
+    useSally(
+      useShallow((s) => ({
+        dict: s.dict,
+        status: s.status,
+        config: s.config,
+        setConfig: s.setConfig,
+        showSettings: s.showSettings,
+        setShowSettings: s.setShowSettings,
+      }))
+    );
   const [pinned, setPinned] = useState(config?.always_on_top ?? false);
   const [volume, setVolume] = useState(config?.readout_volume ?? 1);
 

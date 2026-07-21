@@ -13,10 +13,12 @@ import { Settings } from "./components/Settings";
 import { SetupWizard } from "./components/SetupWizard";
 import { TitleBar } from "./components/TitleBar";
 import { useSally } from "./store";
+import { useShallow } from "zustand/react/shallow";
 import { initTransparency } from "./transparency";
 
 function RecoveryPrompt() {
-  const { dict, setPendingRecoveries } = useSally();
+  const dict = useSally((s) => s.dict);
+  const setPendingRecoveries = useSally((s) => s.setPendingRecoveries);
   const [recovered, setRecovered] = useState<string[] | null>(null);
   const [error, setError] = useState("");
 
@@ -79,7 +81,21 @@ export default function App() {
     addEntry,
     setPartial,
     setPaused,
-  } = useSally();
+  } = useSally(
+    useShallow((s) => ({
+      phase: s.phase,
+      pendingRecoveries: s.pendingRecoveries,
+      showSettings: s.showSettings,
+      setPhase: s.setPhase,
+      setConfig: s.setConfig,
+      setPendingRecoveries: s.setPendingRecoveries,
+      setStatus: s.setStatus,
+      setWarning: s.setWarning,
+      addEntry: s.addEntry,
+      setPartial: s.setPartial,
+      setPaused: s.setPaused,
+    }))
+  );
   const booted = useRef(false);
 
   useEffect(() => {

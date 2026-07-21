@@ -175,43 +175,396 @@ fn spawn_reconnect(
     rx
 }
 
+/// All per-meeting state shared across the control/frame/live-event
+/// handling below. Bundled into one struct (rather than ~25 loose locals in
+/// `run_session`) so the frame- and live-event-handling logic can be moved
+/// into named methods instead of living inline in two very large
+/// `tokio::select!` arms.
+struct Meeting {
+    app: AppHandle,
+    config: AppConfig,
+    store: MeetingStore,
+    pipeline: Pipeline,
+    assembler: Assembler,
+    /// Full meeting timeline kept in memory for the end-of-meeting speaker
+    /// list and review data.
+    sealed_entries: Vec<crate::timeline::TimelineEntry>,
+    paused: bool,
+    last_chunk_ms: u64,
+    last_fragment_ms: u64,
+    /// Readout: translated audio plays only for passages whose source
+    /// language differs from the target (never Vietnamese-to-Vietnamese).
+    target_code: String,
+    readout_enabled: bool,
+    readout_volume: f32,
+    gate: ReadoutGate,
+    player: Option<Player>,
+    /// Last moment readout audio was audible; original-transcription
+    /// fragments in this window that are already target-language are our own
+    /// played translation coming back through loopback, and are dropped.
+    last_playback_at: Option<Instant>,
+    recorder: Option<WavRecorder>,
+    /// Language of the currently open entry's original text, for splitting
+    /// when the spoken language changes mid-stream. Only script-detectable
+    /// languages participate (Latin-only text stays None and never splits).
+    open_lang: Option<&'static str>,
+    /// A speaker-change boundary arrived but the rotation is deferred until
+    /// the open entry's text reaches a sentence end, so the previous
+    /// speaker's lagging transcription drains into their own entry.
+    rotate_pending: bool,
+    pending_since_len: usize,
+    /// Speaker-change splitting: the detector arrives asynchronously once
+    /// the model is ensured (first run downloads ~6 MB). The meeting never
+    /// waits for it; until it lands, entries just split on turns alone.
+    split_det: Option<SplitDetector>,
+    conn: Option<live::LiveConnection>,
+    api_version: String,
+    reconnect_delay: Duration,
+    connected_at: Option<Instant>,
+    early_closes: u32,
+    reconnect_rx: Option<oneshot::Receiver<live::LiveConnection>>,
+    gap_start_ms: Option<u64>,
+    alive: Arc<AtomicBool>,
+}
+
+impl Meeting {
+    /// Process one raw audio frame from capture: mix/resample via the
+    /// pipeline, feed the recorder/split-detector/live connection, and run
+    /// the idle-turn-flush and long-turn-split checks. Only called when the
+    /// meeting isn't paused (the caller checks `paused` before this).
+    fn handle_frame(&mut self, frame: RawFrame) {
+        self.pipeline.push(frame);
+        while let Some(chunk) = self.pipeline.next_chunk() {
+            self.last_chunk_ms = chunk.t_ms;
+            // While readout audio is playing, system audio also
+            // contains our own spoken translation (loopback). Audio
+            // still flows to Gemini uninterrupted — muting it made
+            // the whole pipeline stall until playback finished. The
+            // echo is neutralized downstream instead:
+            // echoTargetLanguage=false keeps the model silent for
+            // it, and target-language transcription fragments inside
+            // the playback window are dropped.
+            let readout_playing = self.player.as_mut().map(|p| p.is_active()).unwrap_or(false);
+            if readout_playing {
+                self.last_playback_at = Some(Instant::now());
+            }
+            let record_err = self
+                .recorder
+                .as_mut()
+                .and_then(|rec| rec.write(chunk.t_ms, &chunk.mixed).err());
+            if let Some(e) = record_err {
+                log::error!("meeting recording stopped: {e}");
+                let _ = self
+                    .app
+                    .emit("sally://warning", format!("Meeting recording stopped: {e}"));
+                self.recorder = None;
+            }
+            self.assembler
+                .push_activity(chunk.mic_active, chunk.system_active, chunk.t_ms);
+            if let Some(d) = self.split_det.as_ref() {
+                // Readout playback is our own translated voice in
+                // the loopback: fed as silence so the detector
+                // never calls it a new speaker.
+                let _ = d.audio_tx.send(split::Feed {
+                    samples: chunk.system,
+                    t_ms: chunk.t_ms,
+                    suppress: readout_playing,
+                });
+            }
+            if let Some(c) = self.conn.as_ref() {
+                // try_send: a stalled socket must not block audio.
+                if c.audio_tx.try_send(chunk.mixed).is_err() {
+                    log::warn!("live audio queue full; dropping chunk {}", chunk.seq);
+                }
+            }
+        }
+        if self.pipeline.take_drop_flag() {
+            log::warn!("audio buffer overflow; oldest audio dropped");
+        }
+        // Idle turn flush keeps provisional entries bounded.
+        if self.last_fragment_ms > 0
+            && self.last_chunk_ms.saturating_sub(self.last_fragment_ms) > TURN_IDLE_FLUSH_MS
+        {
+            flush_turn_readout(
+                &mut self.readout_enabled,
+                &self.assembler,
+                &mut self.gate,
+                &mut self.player,
+                self.readout_volume,
+            );
+            finalize_entry(
+                &self.app,
+                &mut self.assembler,
+                &mut self.store,
+                &self.config,
+                &mut self.sealed_entries,
+            );
+            self.open_lang = None;
+            self.rotate_pending = false;
+            self.last_fragment_ms = 0;
+        } else if !self.paused
+            && self.assembler.open_original_len() >= MIN_SPLIT_CHARS
+            && self
+                .assembler
+                .open_start_ms()
+                .map(|start| self.last_chunk_ms.saturating_sub(start) >= MAX_TURN_DURATION_MS)
+                .unwrap_or(false)
+        {
+            // Long uninterrupted turn: split on a time boundary the
+            // same way a speaker-change boundary would, so trailing
+            // translation can still land in the closing entry.
+            if let Some(sealed) = self.assembler.rotate_turn() {
+                emit_sealed(
+                    &self.app,
+                    sealed,
+                    &mut self.store,
+                    &self.config,
+                    &mut self.sealed_entries,
+                );
+            }
+            self.open_lang = None;
+            self.rotate_pending = false;
+            emit_partial(&self.app, &self.assembler, &self.config);
+        }
+    }
+
+    /// Process one event from the Gemini Live connection: transcription
+    /// fragments, translated-audio playback, turn boundaries, and
+    /// connection-lifecycle events (Ready / Closed / stream ended).
+    fn handle_live_event(&mut self, event: Option<LiveEvent>) {
+        match event {
+            Some(LiveEvent::Ready) => {
+                self.early_closes = 0;
+                self.reconnect_delay = Duration::ZERO;
+                if let Some(start) = self.gap_start_ms.take() {
+                    let now = self.last_chunk_ms.max(start);
+                    if now.saturating_sub(start) >= GAP_MARK_THRESHOLD_MS {
+                        let gap = self.assembler.gap(start, now);
+                        append_and_emit(&self.app, &mut self.store, &self.config, &gap);
+                        self.sealed_entries.push(gap);
+                    }
+                }
+                if !self.paused {
+                    emit_status(&self.app, "live", "");
+                }
+            }
+            Some(LiveEvent::Original(text)) => {
+                // Drop our own readout echo: target-language
+                // fragments while (or just after) the translated
+                // voice was audible are the played translation
+                // coming back through loopback capture.
+                // Wide window: the echo's own transcription can trail
+                // the played audio by several seconds.
+                let echo_window = self
+                    .last_playback_at
+                    .map(|t| t.elapsed() < Duration::from_millis(4000))
+                    .unwrap_or(false);
+                let frag_lang = crate::lang::detect(&text);
+                if echo_window && frag_lang.map(|l| l == self.target_code).unwrap_or(false) {
+                    return;
+                }
+                // Deferred speaker-change split: the previous
+                // speaker's text already ends at a sentence, so this
+                // fragment starts the new voice's entry.
+                if self.rotate_pending && self.assembler.open_ends_sentence() {
+                    if let Some(sealed) = self.assembler.rotate_turn() {
+                        emit_sealed(
+                            &self.app,
+                            sealed,
+                            &mut self.store,
+                            &self.config,
+                            &mut self.sealed_entries,
+                        );
+                    }
+                    self.open_lang = None;
+                    self.rotate_pending = false;
+                }
+                // Language changed mid-stream (e.g. Japanese hand-off
+                // to Vietnamese): split so each entry stays in one
+                // language. Latin-generic text detects as None and
+                // never triggers this.
+                if let (Some(f), Some(o)) = (frag_lang, self.open_lang) {
+                    if f != o && self.assembler.open_original_len() >= MIN_SPLIT_CHARS {
+                        if let Some(sealed) = self.assembler.rotate_turn() {
+                            emit_sealed(
+                                &self.app,
+                                sealed,
+                                &mut self.store,
+                                &self.config,
+                                &mut self.sealed_entries,
+                            );
+                        }
+                        self.rotate_pending = false;
+                    }
+                }
+                if frag_lang.is_some() {
+                    self.open_lang = frag_lang;
+                }
+                self.assembler.push_original(&text, self.last_chunk_ms);
+                // The fragment just appended may have completed the
+                // previous speaker's sentence — split now so the
+                // next fragment starts fresh. The size cap keeps an
+                // unpunctuated stream from merging voices forever.
+                if self.rotate_pending
+                    && (self.assembler.open_ends_sentence()
+                        || self.assembler.open_original_len()
+                            > self.pending_since_len + PENDING_SPLIT_MAX_EXTRA_CHARS)
+                {
+                    if let Some(sealed) = self.assembler.rotate_turn() {
+                        emit_sealed(
+                            &self.app,
+                            sealed,
+                            &mut self.store,
+                            &self.config,
+                            &mut self.sealed_entries,
+                        );
+                    }
+                    self.open_lang = None;
+                    self.rotate_pending = false;
+                }
+                self.last_fragment_ms = self.last_chunk_ms;
+                emit_partial(&self.app, &self.assembler, &self.config);
+            }
+            Some(LiveEvent::Translated(text)) => {
+                self.assembler.push_translated(&text, self.last_chunk_ms);
+                self.last_fragment_ms = self.last_chunk_ms;
+                emit_partial(&self.app, &self.assembler, &self.config);
+            }
+            Some(LiveEvent::Audio(samples)) => {
+                if self.readout_enabled && !self.paused {
+                    let original = self.assembler.partial().map(|p| p.original).unwrap_or_default();
+                    let playable = self.gate.push_audio(samples, &original);
+                    // Never read the user's own mic speech back to
+                    // them translated — only remote (Meeting) turns
+                    // qualify.
+                    //
+                    // macOS only: ScreenCaptureKit's per-application
+                    // audio filter is reportedly less exact than its
+                    // per-app *video* filter — audio capture can
+                    // still include more than the selected app, so
+                    // Sally's own readout can loop back in as "new"
+                    // remote speech even with a specific app
+                    // selected (this doesn't happen on Windows,
+                    // where per-app process-loopback is exact).
+                    // Suppress audio events that arrive while our
+                    // own readout was active in roughly the same
+                    // window the echo-window text filter already
+                    // uses, to stop the retranslate-and-repeat loop
+                    // this produces.
+                    #[cfg(target_os = "macos")]
+                    let self_echo_likely = self
+                        .last_playback_at
+                        .map(|t| t.elapsed() < Duration::from_millis(4000))
+                        .unwrap_or(false);
+                    #[cfg(not(target_os = "macos"))]
+                    let self_echo_likely = false;
+                    if !self.assembler.open_mic_dominated() && !self_echo_likely {
+                        play(
+                            &mut self.player,
+                            &mut self.readout_enabled,
+                            &playable,
+                            self.readout_volume,
+                        );
+                    }
+                }
+            }
+            Some(LiveEvent::TurnComplete) => {
+                flush_turn_readout(
+                    &mut self.readout_enabled,
+                    &self.assembler,
+                    &mut self.gate,
+                    &mut self.player,
+                    self.readout_volume,
+                );
+                // Rotate instead of sealing immediately: the entry
+                // stays open one more turn so trailing translation
+                // fragments can land in it.
+                if let Some(sealed) = self.assembler.rotate_turn() {
+                    emit_sealed(
+                        &self.app,
+                        sealed,
+                        &mut self.store,
+                        &self.config,
+                        &mut self.sealed_entries,
+                    );
+                }
+                self.open_lang = None;
+                self.rotate_pending = false;
+                self.last_fragment_ms = 0;
+            }
+            other => {
+                // Closed event, or `None` when the reader task ended
+                // without a Close frame: reconnect and mark the gap.
+                let reason = match other {
+                    Some(LiveEvent::Closed(r)) => r,
+                    _ => "connection lost".to_string(),
+                };
+                log::warn!("live connection closed: {reason}");
+                self.conn = None;
+                if self.gap_start_ms.is_none() {
+                    self.gap_start_ms = Some(self.last_chunk_ms);
+                }
+                // A close shortly after connecting means setup was
+                // rejected, not a network drop. After three of those
+                // in a row, try the other API version — preview
+                // models move between v1alpha and v1beta.
+                let early = self
+                    .connected_at
+                    .map(|t| t.elapsed() < Duration::from_secs(5))
+                    .unwrap_or(false);
+                self.connected_at = None;
+                // 1007 schema errors ("Invalid JSON payload…Unknown
+                // name") mean this API version rejects our setup
+                // shape — flip immediately instead of after three
+                // tries.
+                let schema_reject =
+                    reason.contains("Unknown name") || reason.contains("Invalid JSON payload");
+                if early {
+                    self.early_closes += 1;
+                    if schema_reject || self.early_closes >= 3 {
+                        self.early_closes = 0;
+                        self.api_version = if self.api_version == "v1alpha" {
+                            "v1beta".into()
+                        } else {
+                            "v1alpha".into()
+                        };
+                        log::warn!("live setup rejected; trying API version {}", self.api_version);
+                    }
+                }
+                self.reconnect_delay = (self.reconnect_delay * 2 + Duration::from_secs(1)).min(MAX_BACKOFF);
+                emit_status(&self.app, "reconnecting", &reason);
+                if self.reconnect_rx.is_none() {
+                    self.reconnect_rx = Some(spawn_reconnect(
+                        self.app.clone(),
+                        self.config.clone(),
+                        self.alive.clone(),
+                        self.api_version.clone(),
+                        self.reconnect_delay,
+                    ));
+                }
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_session(
     app: AppHandle,
     config: AppConfig,
-    mut store: MeetingStore,
+    store: MeetingStore,
     mut frame_rx: mpsc::Receiver<RawFrame>,
     mut control_rx: mpsc::Receiver<Control>,
     done_tx: oneshot::Sender<Result<ReviewData>>,
     capture_handle: capture::CaptureHandle,
 ) {
-    let mut pipeline = Pipeline::new();
-    let mut assembler = Assembler::new();
-    // Full meeting timeline kept in memory for the end-of-meeting speaker
-    // list and review data.
-    let mut sealed_entries: Vec<crate::timeline::TimelineEntry> = Vec::new();
-    let mut paused = false;
-    let mut last_chunk_ms: u64 = 0;
-    let mut last_fragment_ms: u64 = 0;
     let mut journal_tick = tokio::time::interval(JOURNAL_INTERVAL);
     let alive = Arc::new(AtomicBool::new(true));
-
-    // Readout: translated audio plays only for passages whose source
-    // language differs from the target (never Vietnamese-to-Vietnamese).
     let target_code = crate::lang::bcp47(&config.target_language).to_string();
-    let mut readout_enabled = config.readout_enabled;
-    let mut readout_volume = config.readout_volume;
-    let mut gate = ReadoutGate::new(&target_code);
-    let mut player: Option<Player> = None;
-    // Last moment readout audio was audible; original-transcription
-    // fragments in this window that are already target-language are our own
-    // played translation coming back through loopback, and are dropped.
-    let mut last_playback_at: Option<Instant> = None;
 
     // Optional local recording: mixed 16 kHz chunks streamed to a WAV whose
     // positions line up with transcript timestamps. A recorder failure
     // degrades to "no recording" with a warning — it never ends the meeting.
-    let mut recorder: Option<WavRecorder> = if config.save_audio {
+    let recorder: Option<WavRecorder> = if config.save_audio {
         match WavRecorder::create(&store.audio_path()) {
             Ok(r) => Some(r),
             Err(e) => {
@@ -227,21 +580,9 @@ async fn run_session(
         None
     };
 
-    // Language of the currently open entry's original text, for splitting
-    // when the spoken language changes mid-stream. Only script-detectable
-    // languages participate (Latin-only text stays None and never splits).
-    let mut open_lang: Option<&'static str> = None;
-
-    // A speaker-change boundary arrived but the rotation is deferred until
-    // the open entry's text reaches a sentence end, so the previous
-    // speaker's lagging transcription drains into their own entry.
-    let mut rotate_pending = false;
-    let mut pending_since_len = 0usize;
-
     // Speaker-change splitting: the detector arrives asynchronously once
     // the model is ensured (first run downloads ~6 MB). The meeting never
     // waits for it; until it lands, entries just split on turns alone.
-    let mut split_det: Option<SplitDetector> = None;
     let mut split_rx: Option<oneshot::Receiver<SplitDetector>> = None;
     if config.speaker_split_enabled {
         let (tx, rx) = oneshot::channel();
@@ -252,11 +593,7 @@ async fn run_session(
             match split::ensure_model(&data_dir, &url).await {
                 // Model load happens on the worker thread; start() blocks
                 // until it reports, so keep it off the async runtime.
-                Ok(path) => match tokio::task::spawn_blocking(move || {
-                    SplitDetector::start(&path)
-                })
-                .await
-                {
+                Ok(path) => match tokio::task::spawn_blocking(move || SplitDetector::start(&path)).await {
                     Ok(Ok(d)) => {
                         let _ = tx.send(d);
                     }
@@ -269,20 +606,46 @@ async fn run_session(
     }
 
     emit_status(&app, "connecting", "");
-    let mut conn: Option<live::LiveConnection> = None;
-    let mut api_version = config.live_api_version.clone();
-    let mut reconnect_delay = Duration::ZERO;
-    let mut connected_at: Option<Instant> = None;
-    let mut early_closes = 0u32;
-    let mut reconnect_rx: Option<oneshot::Receiver<live::LiveConnection>> =
-        Some(spawn_reconnect(
-            app.clone(),
-            config.clone(),
-            alive.clone(),
-            api_version.clone(),
-            reconnect_delay,
-        ));
-    let mut gap_start_ms: Option<u64> = None;
+    let api_version = config.live_api_version.clone();
+    let reconnect_delay = Duration::ZERO;
+    let reconnect_rx = Some(spawn_reconnect(
+        app.clone(),
+        config.clone(),
+        alive.clone(),
+        api_version.clone(),
+        reconnect_delay,
+    ));
+
+    let mut state = Meeting {
+        pipeline: Pipeline::new(),
+        assembler: Assembler::new(),
+        sealed_entries: Vec::new(),
+        paused: false,
+        last_chunk_ms: 0,
+        last_fragment_ms: 0,
+        readout_enabled: config.readout_enabled,
+        readout_volume: config.readout_volume,
+        gate: ReadoutGate::new(&target_code),
+        player: None,
+        last_playback_at: None,
+        recorder,
+        open_lang: None,
+        rotate_pending: false,
+        pending_since_len: 0,
+        split_det: None,
+        conn: None,
+        api_version,
+        reconnect_delay,
+        connected_at: None,
+        early_closes: 0,
+        reconnect_rx,
+        gap_start_ms: None,
+        alive: alive.clone(),
+        target_code,
+        app,
+        config,
+        store,
+    };
 
     loop {
         tokio::select! {
@@ -290,28 +653,28 @@ async fn run_session(
             ctrl = control_rx.recv() => {
                 match ctrl {
                     Some(Control::Pause) => {
-                        paused = true;
-                        if let Some(p) = player.as_ref() {
+                        state.paused = true;
+                        if let Some(p) = state.player.as_ref() {
                             p.clear();
                         }
-                        emit_status(&app, "paused", "");
+                        emit_status(&state.app, "paused", "");
                     }
                     Some(Control::Resume) => {
-                        paused = false;
-                        emit_status(&app, if conn.is_some() { "live" } else { "reconnecting" }, "");
+                        state.paused = false;
+                        emit_status(&state.app, if state.conn.is_some() { "live" } else { "reconnecting" }, "");
                     }
                     Some(Control::SetReadout(enabled)) => {
-                        readout_enabled = enabled;
+                        state.readout_enabled = enabled;
                         if !enabled {
-                            if let Some(p) = player.as_ref() {
+                            if let Some(p) = state.player.as_ref() {
                                 p.clear();
                             }
                         }
                     }
                     Some(Control::SetReadoutVolume(v)) => {
-                        readout_volume = v.clamp(0.0, 1.0);
-                        if let Some(p) = player.as_ref() {
-                            p.set_volume(readout_volume);
+                        state.readout_volume = v.clamp(0.0, 1.0);
+                        if let Some(p) = state.player.as_ref() {
+                            p.set_volume(state.readout_volume);
                         }
                     }
                     Some(Control::Stop) | None => break,
@@ -323,7 +686,7 @@ async fn run_session(
                 split_rx = None;
                 if let Ok(d) = det {
                     log::info!("speaker split active");
-                    split_det = Some(d);
+                    state.split_det = Some(d);
                 }
             }
 
@@ -334,33 +697,33 @@ async fn run_session(
             // Instead the split goes pending and fires once the open entry's
             // text reaches a sentence boundary (or a size cap), letting the
             // tail drain into its own entry first.
-            boundary = async { split_det.as_mut().unwrap().boundary_rx.recv().await },
-                if split_det.is_some() => {
+            boundary = async { state.split_det.as_mut().unwrap().boundary_rx.recv().await },
+                if state.split_det.is_some() => {
                 match boundary {
                     Some(_t_ms) => {
-                        if !paused
-                            && !assembler.open_mic_dominated()
-                            && assembler.open_original_len() >= MIN_SPLIT_CHARS
+                        if !state.paused
+                            && !state.assembler.open_mic_dominated()
+                            && state.assembler.open_original_len() >= MIN_SPLIT_CHARS
                         {
-                            rotate_pending = true;
-                            pending_since_len = assembler.open_original_len();
+                            state.rotate_pending = true;
+                            state.pending_since_len = state.assembler.open_original_len();
                         }
                     }
                     None => {
                         // Worker thread ended (it never does unless the
                         // session is tearing down): stop selecting on it.
-                        split_det = None;
+                        state.split_det = None;
                     }
                 }
             }
 
             // A background reconnect attempt succeeded.
-            newconn = async { reconnect_rx.as_mut().unwrap().await }, if reconnect_rx.is_some() => {
-                reconnect_rx = None;
+            newconn = async { state.reconnect_rx.as_mut().unwrap().await }, if state.reconnect_rx.is_some() => {
+                state.reconnect_rx = None;
                 match newconn {
                     Ok(c) => {
-                        conn = Some(c);
-                        connected_at = Some(Instant::now());
+                        state.conn = Some(c);
+                        state.connected_at = Some(Instant::now());
                         // "live" is emitted on setupComplete (Ready), not
                         // here: a socket that opens but gets its setup
                         // rejected must not flash the live status.
@@ -372,315 +735,28 @@ async fn run_session(
             // Raw audio frames from capture.
             frame = frame_rx.recv() => {
                 let Some(frame) = frame else { break };
-                if paused {
+                if state.paused {
                     continue;
                 }
-                pipeline.push(frame);
-                while let Some(chunk) = pipeline.next_chunk() {
-                    last_chunk_ms = chunk.t_ms;
-                    // While readout audio is playing, system audio also
-                    // contains our own spoken translation (loopback). Audio
-                    // still flows to Gemini uninterrupted — muting it made
-                    // the whole pipeline stall until playback finished. The
-                    // echo is neutralized downstream instead:
-                    // echoTargetLanguage=false keeps the model silent for
-                    // it, and target-language transcription fragments inside
-                    // the playback window are dropped.
-                    let readout_playing = player
-                        .as_mut()
-                        .map(|p| p.is_active())
-                        .unwrap_or(false);
-                    if readout_playing {
-                        last_playback_at = Some(Instant::now());
-                    }
-                    let record_err = recorder
-                        .as_mut()
-                        .and_then(|rec| rec.write(chunk.t_ms, &chunk.mixed).err());
-                    if let Some(e) = record_err {
-                        log::error!("meeting recording stopped: {e}");
-                        let _ = app.emit(
-                            "sally://warning",
-                            format!("Meeting recording stopped: {e}"),
-                        );
-                        recorder = None;
-                    }
-                    assembler.push_activity(chunk.mic_active, chunk.system_active, chunk.t_ms);
-                    if let Some(d) = split_det.as_ref() {
-                        // Readout playback is our own translated voice in
-                        // the loopback: fed as silence so the detector
-                        // never calls it a new speaker.
-                        let _ = d.audio_tx.send(split::Feed {
-                            samples: chunk.system,
-                            t_ms: chunk.t_ms,
-                            suppress: readout_playing,
-                        });
-                    }
-                    if let Some(c) = conn.as_ref() {
-                        // try_send: a stalled socket must not block audio.
-                        if c.audio_tx.try_send(chunk.mixed).is_err() {
-                            log::warn!("live audio queue full; dropping chunk {}", chunk.seq);
-                        }
-                    }
-                }
-                if pipeline.take_drop_flag() {
-                    log::warn!("audio buffer overflow; oldest audio dropped");
-                }
-                // Idle turn flush keeps provisional entries bounded.
-                if last_fragment_ms > 0
-                    && last_chunk_ms.saturating_sub(last_fragment_ms) > TURN_IDLE_FLUSH_MS
-                {
-                    if readout_enabled {
-                        let original = assembler
-                            .partial()
-                            .map(|p| p.original)
-                            .unwrap_or_default();
-                        let tail = gate.end_turn(&original);
-                        // Never read the user's own mic speech back to them
-                        // translated — only remote (Meeting) turns qualify.
-                        if !assembler.open_mic_dominated() {
-                            play(&mut player, &mut readout_enabled, &tail, readout_volume);
-                        }
-                    }
-                    finalize_entry(&app, &mut assembler, &mut store,
-                                   &config, &mut sealed_entries);
-                    open_lang = None;
-                    rotate_pending = false;
-                    last_fragment_ms = 0;
-                } else if !paused
-                    && assembler.open_original_len() >= MIN_SPLIT_CHARS
-                    && assembler
-                        .open_start_ms()
-                        .map(|start| last_chunk_ms.saturating_sub(start) >= MAX_TURN_DURATION_MS)
-                        .unwrap_or(false)
-                {
-                    // Long uninterrupted turn: split on a time boundary the
-                    // same way a speaker-change boundary would, so trailing
-                    // translation can still land in the closing entry.
-                    if let Some(sealed) = assembler.rotate_turn() {
-                        emit_sealed(&app, sealed, &mut store, &config,
-                                    &mut sealed_entries);
-                    }
-                    open_lang = None;
-                    rotate_pending = false;
-                    emit_partial(&app, &assembler, &config);
-                }
+                state.handle_frame(frame);
             }
 
             // Events from the Gemini Live connection.
-            event = async { conn.as_mut().unwrap().events_rx.recv().await }, if conn.is_some() => {
-                match event {
-                    Some(LiveEvent::Ready) => {
-                        early_closes = 0;
-                        reconnect_delay = Duration::ZERO;
-                        if let Some(start) = gap_start_ms.take() {
-                            let now = last_chunk_ms.max(start);
-                            if now.saturating_sub(start) >= GAP_MARK_THRESHOLD_MS {
-                                let gap = assembler.gap(start, now);
-                                append_and_emit(&app, &mut store, &config, &gap);
-                                sealed_entries.push(gap);
-                            }
-                        }
-                        if !paused {
-                            emit_status(&app, "live", "");
-                        }
-                    }
-                    Some(LiveEvent::Original(text)) => {
-                        // Drop our own readout echo: target-language
-                        // fragments while (or just after) the translated
-                        // voice was audible are the played translation
-                        // coming back through loopback capture.
-                        // Wide window: the echo's own transcription can trail
-                        // the played audio by several seconds.
-                        let echo_window = last_playback_at
-                            .map(|t| t.elapsed() < Duration::from_millis(4000))
-                            .unwrap_or(false);
-                        let frag_lang = crate::lang::detect(&text);
-                        if echo_window
-                            && frag_lang.map(|l| l == target_code).unwrap_or(false)
-                        {
-                            continue;
-                        }
-                        // Deferred speaker-change split: the previous
-                        // speaker's text already ends at a sentence, so this
-                        // fragment starts the new voice's entry.
-                        if rotate_pending && assembler.open_ends_sentence() {
-                            if let Some(sealed) = assembler.rotate_turn() {
-                                emit_sealed(&app, sealed, &mut store, &config,
-                                            &mut sealed_entries);
-                            }
-                            open_lang = None;
-                            rotate_pending = false;
-                        }
-                        // Language changed mid-stream (e.g. Japanese hand-off
-                        // to Vietnamese): split so each entry stays in one
-                        // language. Latin-generic text detects as None and
-                        // never triggers this.
-                        if let (Some(f), Some(o)) = (frag_lang, open_lang) {
-                            if f != o
-                                && assembler.open_original_len() >= MIN_SPLIT_CHARS
-                            {
-                                if let Some(sealed) = assembler.rotate_turn() {
-                                    emit_sealed(&app, sealed, &mut store, &config,
-                                                &mut sealed_entries);
-                                }
-                                rotate_pending = false;
-                            }
-                        }
-                        if frag_lang.is_some() {
-                            open_lang = frag_lang;
-                        }
-                        assembler.push_original(&text, last_chunk_ms);
-                        // The fragment just appended may have completed the
-                        // previous speaker's sentence — split now so the
-                        // next fragment starts fresh. The size cap keeps an
-                        // unpunctuated stream from merging voices forever.
-                        if rotate_pending
-                            && (assembler.open_ends_sentence()
-                                || assembler.open_original_len()
-                                    > pending_since_len + PENDING_SPLIT_MAX_EXTRA_CHARS)
-                        {
-                            if let Some(sealed) = assembler.rotate_turn() {
-                                emit_sealed(&app, sealed, &mut store, &config,
-                                            &mut sealed_entries);
-                            }
-                            open_lang = None;
-                            rotate_pending = false;
-                        }
-                        last_fragment_ms = last_chunk_ms;
-                        emit_partial(&app, &assembler, &config);
-                    }
-                    Some(LiveEvent::Translated(text)) => {
-                        assembler.push_translated(&text, last_chunk_ms);
-                        last_fragment_ms = last_chunk_ms;
-                        emit_partial(&app, &assembler, &config);
-                    }
-                    Some(LiveEvent::Audio(samples)) => {
-                        if readout_enabled && !paused {
-                            let original = assembler
-                                .partial()
-                                .map(|p| p.original)
-                                .unwrap_or_default();
-                            let playable = gate.push_audio(samples, &original);
-                            // Never read the user's own mic speech back to
-                            // them translated — only remote (Meeting) turns
-                            // qualify.
-                            //
-                            // macOS only: ScreenCaptureKit's per-application
-                            // audio filter is reportedly less exact than its
-                            // per-app *video* filter — audio capture can
-                            // still include more than the selected app, so
-                            // Sally's own readout can loop back in as "new"
-                            // remote speech even with a specific app
-                            // selected (this doesn't happen on Windows,
-                            // where per-app process-loopback is exact).
-                            // Suppress audio events that arrive while our
-                            // own readout was active in roughly the same
-                            // window the echo-window text filter already
-                            // uses, to stop the retranslate-and-repeat loop
-                            // this produces.
-                            #[cfg(target_os = "macos")]
-                            let self_echo_likely = last_playback_at
-                                .map(|t| t.elapsed() < Duration::from_millis(4000))
-                                .unwrap_or(false);
-                            #[cfg(not(target_os = "macos"))]
-                            let self_echo_likely = false;
-                            if !assembler.open_mic_dominated() && !self_echo_likely {
-                                play(&mut player, &mut readout_enabled, &playable, readout_volume);
-                            }
-                        }
-                    }
-                    Some(LiveEvent::TurnComplete) => {
-                        if readout_enabled {
-                            let original = assembler
-                                .partial()
-                                .map(|p| p.original)
-                                .unwrap_or_default();
-                            let tail = gate.end_turn(&original);
-                            // Never read the user's own mic speech back to
-                            // them translated — only remote (Meeting) turns
-                            // qualify.
-                            if !assembler.open_mic_dominated() {
-                                play(&mut player, &mut readout_enabled, &tail, readout_volume);
-                            }
-                        }
-                        // Rotate instead of sealing immediately: the entry
-                        // stays open one more turn so trailing translation
-                        // fragments can land in it.
-                        if let Some(sealed) = assembler.rotate_turn() {
-                            emit_sealed(&app, sealed, &mut store, &config,
-                                        &mut sealed_entries);
-                        }
-                        open_lang = None;
-                        rotate_pending = false;
-                        last_fragment_ms = 0;
-                    }
-                    other => {
-                        // Closed event, or `None` when the reader task ended
-                        // without a Close frame: reconnect and mark the gap.
-                        let reason = match other {
-                            Some(LiveEvent::Closed(r)) => r,
-                            _ => "connection lost".to_string(),
-                        };
-                        log::warn!("live connection closed: {reason}");
-                        conn = None;
-                        if gap_start_ms.is_none() {
-                            gap_start_ms = Some(last_chunk_ms);
-                        }
-                        // A close shortly after connecting means setup was
-                        // rejected, not a network drop. After three of those
-                        // in a row, try the other API version — preview
-                        // models move between v1alpha and v1beta.
-                        let early = connected_at
-                            .map(|t| t.elapsed() < Duration::from_secs(5))
-                            .unwrap_or(false);
-                        connected_at = None;
-                        // 1007 schema errors ("Invalid JSON payload…Unknown
-                        // name") mean this API version rejects our setup
-                        // shape — flip immediately instead of after three
-                        // tries.
-                        let schema_reject = reason.contains("Unknown name")
-                            || reason.contains("Invalid JSON payload");
-                        if early {
-                            early_closes += 1;
-                            if schema_reject || early_closes >= 3 {
-                                early_closes = 0;
-                                api_version = if api_version == "v1alpha" {
-                                    "v1beta".into()
-                                } else {
-                                    "v1alpha".into()
-                                };
-                                log::warn!(
-                                    "live setup rejected; trying API version {api_version}"
-                                );
-                            }
-                        }
-                        reconnect_delay = (reconnect_delay * 2 + Duration::from_secs(1))
-                            .min(MAX_BACKOFF);
-                        emit_status(&app, "reconnecting", &reason);
-                        if reconnect_rx.is_none() {
-                            reconnect_rx = Some(spawn_reconnect(
-                                app.clone(),
-                                config.clone(),
-                                alive.clone(),
-                                api_version.clone(),
-                                reconnect_delay,
-                            ));
-                        }
-                    }
-                }
+            event = async { state.conn.as_mut().unwrap().events_rx.recv().await }, if state.conn.is_some() => {
+                state.handle_live_event(event);
             }
 
             // Periodic recovery journal (design §8.2).
             _ = journal_tick.tick() => {
-                let partial = assembler.partial();
+                let partial = state.assembler.partial();
                 let journal = RecoveryJournal {
                     open_original: partial.as_ref().map(|p| p.original.clone()).unwrap_or_default(),
                     open_translated: partial.as_ref().map(|p| p.translated.clone()).unwrap_or_default(),
                     open_start_ms: partial.as_ref().map(|p| p.start_ms).unwrap_or(0),
                     ..Default::default()
                 };
-                if let Err(e) = store.write_journal(&journal) {
-                    emit_status(&app, "storage-error", &e.to_string());
+                if let Err(e) = state.store.write_journal(&journal) {
+                    emit_status(&state.app, "storage-error", &e.to_string());
                 }
             }
         }
@@ -691,19 +767,24 @@ async fn run_session(
     // immediate.
     alive.store(false, Ordering::SeqCst);
     capture_handle.stop();
-    finalize_entry(&app, &mut assembler, &mut store, &config,
-                   &mut sealed_entries);
-    if let Some(rec) = recorder.as_mut() {
+    finalize_entry(
+        &state.app,
+        &mut state.assembler,
+        &mut state.store,
+        &state.config,
+        &mut state.sealed_entries,
+    );
+    if let Some(rec) = state.recorder.as_mut() {
         if let Err(e) = rec.finalize() {
             log::error!("recording finalize failed: {e}");
         }
     }
-    drop(conn);
-    if let Err(e) = store.finalize() {
+    drop(state.conn);
+    if let Err(e) = state.store.finalize() {
         log::error!("finalize failed: {e}");
     }
-    emit_status(&app, "ended", "");
-    let _ = done_tx.send(Ok(ReviewData { store }));
+    emit_status(&state.app, "ended", "");
+    let _ = done_tx.send(Ok(ReviewData { store: state.store }));
 }
 
 /// Send gated samples to the output device, opening it lazily. If no output
@@ -749,12 +830,7 @@ fn emit_sealed(
     // language, mirror the original unconditionally: that's what the
     // "translation" trivially is, and it's more consistent than trusting
     // whatever fragment (or nothing) Gemini happened to send.
-    if crate::lang::detect(&entry.original)
-        .map(|l| l == crate::lang::bcp47(&config.target_language))
-        .unwrap_or(false)
-    {
-        entry.translated = entry.original.clone();
-    }
+    mirror_if_already_target_language(&entry.original, &mut entry.translated, &config.target_language);
     append_and_emit(app, store, config, &entry);
     sealed_entries.push(entry);
 }
@@ -788,12 +864,40 @@ fn emit_partial(app: &AppHandle, assembler: &Assembler, config: &AppConfig) {
     if let Some(mut p) = assembler.partial() {
         // Same target-language mirroring as emit_sealed, applied live so
         // the translated panel doesn't sit empty until the turn seals.
-        if crate::lang::detect(&p.original)
-            .map(|l| l == crate::lang::bcp47(&config.target_language))
-            .unwrap_or(false)
-        {
-            p.translated = p.original.clone();
-        }
+        mirror_if_already_target_language(&p.original, &mut p.translated, &config.target_language);
         let _ = app.emit("sally://partial", p);
+    }
+}
+
+/// Flush the readout gate's trailing buffered audio for the ending turn and
+/// play it, unless the closing turn was mic-dominated (never read the
+/// user's own speech back to them).
+fn flush_turn_readout(
+    readout_enabled: &mut bool,
+    assembler: &Assembler,
+    gate: &mut ReadoutGate,
+    player: &mut Option<Player>,
+    readout_volume: f32,
+) {
+    if !*readout_enabled {
+        return;
+    }
+    let original = assembler.partial().map(|p| p.original).unwrap_or_default();
+    let tail = gate.end_turn(&original);
+    if !assembler.open_mic_dominated() {
+        play(player, readout_enabled, &tail, readout_volume);
+    }
+}
+
+/// Mirror `original` into `translated` when local language detection is
+/// confident the passage is already in the target language — more
+/// consistent than trusting whatever fragment (or nothing) Gemini's
+/// echoTargetLanguage=false setting happens to send for such passages.
+fn mirror_if_already_target_language(original: &str, translated: &mut String, target_language: &str) {
+    if crate::lang::detect(original)
+        .map(|l| l == crate::lang::bcp47(target_language))
+        .unwrap_or(false)
+    {
+        *translated = original.to_string();
     }
 }

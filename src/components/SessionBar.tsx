@@ -1,18 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { api } from "../api";
+import { api, formatTimestamp } from "../api";
 import { CornerTools } from "./CornerTools";
 import { IconDoc, IconRefresh, IconWarning } from "./Icons";
 import { useSally } from "../store";
-
-function formatElapsed(ms: number): string {
-  const totalS = Math.floor(ms / 1000);
-  const h = Math.floor(totalS / 3600);
-  const m = Math.floor((totalS % 3600) / 60);
-  const s = totalS % 60;
-  const mm = String(m).padStart(2, "0");
-  const ss = String(s).padStart(2, "0");
-  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
-}
+import { useShallow } from "zustand/react/shallow";
 
 /// Replaces the old always-visible inline error/warning text with a small
 /// warning-icon button; clicking it opens a bubble below with the full
@@ -83,7 +74,29 @@ export function SessionBar() {
     resetMeeting,
     setStatus,
     setConfig,
-  } = useSally();
+  } = useSally(
+    useShallow((s) => ({
+      dict: s.dict,
+      phase: s.phase,
+      paused: s.paused,
+      meetingStartedAt: s.meetingStartedAt,
+      pausedAccumMs: s.pausedAccumMs,
+      pausedSince: s.pausedSince,
+      config: s.config,
+      status: s.status,
+      statusDetail: s.statusDetail,
+      meetingEndedAt: s.meetingEndedAt,
+      warning: s.warning,
+      setPhase: s.setPhase,
+      setPaused: s.setPaused,
+      setReview: s.setReview,
+      startMeetingClock: s.startMeetingClock,
+      stopMeetingClock: s.stopMeetingClock,
+      resetMeeting: s.resetMeeting,
+      setStatus: s.setStatus,
+      setConfig: s.setConfig,
+    }))
+  );
   const [now, setNow] = useState(Date.now());
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [error, setError] = useState("");
@@ -93,9 +106,10 @@ export function SessionBar() {
   const [sourceChoice, setSourceChoice] = useState("");
 
   useEffect(() => {
+    if (phase !== "live") return;
     const id = setInterval(() => setNow(Date.now()), 500);
     return () => clearInterval(id);
-  }, []);
+  }, [phase]);
 
   // Clock freezes at meeting end instead of ticking forever.
   const clockNow =
@@ -172,7 +186,7 @@ export function SessionBar() {
   return (
     <>
       <div className="session-bar">
-        <span className="elapsed">{formatElapsed(Math.max(0, elapsed))}</span>
+        <span className="elapsed">{formatTimestamp(Math.max(0, elapsed))}</span>
         {phase !== "live" ? (
           <>
             <button className="btn primary" onClick={openSourcePicker} disabled={busy}>

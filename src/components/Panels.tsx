@@ -5,7 +5,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { formatTimestamp, TimelineEntry } from "../api";
 import { useSally } from "../store";
 
-function useFollowLive(dep: unknown) {
+function useFollowLive(entriesLength: number, partialText: string | undefined) {
   const ref = useRef<HTMLDivElement>(null);
   const [following, setFollowing] = useState(true);
 
@@ -22,7 +22,7 @@ function useFollowLive(dep: unknown) {
     if (el && following) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [dep, following]);
+  }, [entriesLength, partialText, following]);
 
   const jump = useCallback(() => {
     const el = ref.current;
@@ -33,14 +33,14 @@ function useFollowLive(dep: unknown) {
   return { ref, following, onScroll, jump };
 }
 
-function EntryBlock({
+const EntryBlock = React.memo(function EntryBlock({
   entry,
   mode,
 }: {
   entry: TimelineEntry;
   mode: "original" | "translated";
 }) {
-  const { dict } = useSally();
+  const dict = useSally((s) => s.dict);
   if (entry.kind === "gap") {
     return (
       <div className="entry gap">
@@ -58,7 +58,7 @@ function EntryBlock({
       <span className="text">{text}</span>
     </div>
   );
-}
+});
 
 function Panel({
   title,
@@ -67,11 +67,14 @@ function Panel({
   title: string;
   mode: "original" | "translated";
 }) {
-  const { dict, entries, partial } = useSally();
+  const dict = useSally((s) => s.dict);
+  const entries = useSally((s) => s.entries);
+  const partial = useSally((s) => s.partial);
   const partialText =
     mode === "original" ? partial?.original : partial?.translated;
   const { ref, following, onScroll, jump } = useFollowLive(
-    entries.length * 1000 + (partialText?.length ?? 0)
+    entries.length,
+    partialText
   );
 
   return (
@@ -103,7 +106,7 @@ function Panel({
 }
 
 export function Panels() {
-  const { dict } = useSally();
+  const dict = useSally((s) => s.dict);
   const [ratio, setRatio] = useState(() => {
     const saved = Number(localStorage.getItem("sally.split"));
     return Number.isFinite(saved) && saved >= 0.15 && saved <= 0.85 ? saved : 0.5;

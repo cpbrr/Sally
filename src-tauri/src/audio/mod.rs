@@ -18,7 +18,29 @@ pub mod pipeline;
 pub mod playback;
 pub mod recorder;
 
+use crate::error::{Result, SallyError};
 use serde::Serialize;
+
+/// Spawn `body` on its own OS thread and block the caller until it reports
+/// startup success or failure via the `Sender` it's given — so `spawn_*`
+/// functions fail fast on startup errors instead of returning a handle to a
+/// thread that's already dead. `context` names the failure in the error
+/// message if the thread panics or drops the sender without a reply.
+fn spawn_with_ready_signal(
+    context: &'static str,
+    body: impl FnOnce(std::sync::mpsc::Sender<Result<()>>) + Send + 'static,
+) -> Result<std::thread::JoinHandle<()>> {
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<()>>();
+    let handle = std::thread::spawn(move || body(ready_tx));
+    match ready_rx.recv() {
+        Ok(Ok(())) => Ok(handle),
+        Ok(Err(e)) => {
+            let _ = handle.join();
+            Err(e)
+        }
+        Err(_) => Err(SallyError::Audio(format!("{context} thread died during startup"))),
+    }
+}
 
 /// Target format required by the Gemini Live API input.
 pub const TARGET_SAMPLE_RATE: u32 = 16_000;
