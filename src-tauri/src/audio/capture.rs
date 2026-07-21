@@ -217,21 +217,46 @@ fn spawn_macos_system_thread(
     let mut attempts: Vec<String> = Vec::new();
     let want_app = !capture_app.is_empty();
 
-    // A specific app can only be isolated through ScreenCaptureKit's
-    // per-application filter today — the Core Audio tap only knows how
-    // to tap everything — so a capture_app selection skips straight to
-    // SCK regardless of OS version or the method preference below.
-    let want_tap = !want_app
-        && match mac_capture_method.as_str() {
-            "tap" => true,
-            "screencapturekit" => false,
-            _ => macos_version()
-                .map(|(major, minor)| major > 14 || (major == 14 && minor >= 4))
-                .unwrap_or(false),
-        };
+    let want_tap = match mac_capture_method.as_str() {
+        "tap" => true,
+        "screencapturekit" => false,
+        _ => macos_version()
+            .map(|(major, minor)| major > 14 || (major == 14 && minor >= 4))
+            .unwrap_or(false),
+    };
 
-    if want_tap {
-        match super::coreaudio_tap::spawn_tap_capture(session_start, tx.clone(), stop.clone())
+    if want_app && want_tap {
+        // Per-app capture through the Core Audio tap: resolves entirely
+        // via the HAL (kAudioHardwarePropertyProcessObjectList +
+        // kAudioProcessProperty*), so unlike ScreenCaptureKit below, this
+        // path never touches the Screen Recording permission. Falls
+        // through to SCK if the target process can't be found this way
+        // (stale selection, or it isn't visible to Core Audio for some
+        // reason) or the tap itself fails to start.
+        match super::coreaudio_tap::resolve_process_by_bundle_id(&capture_app) {
+            Some(process_id) => match super::coreaudio_tap::spawn_tap_capture(
+                session_start,
+                tx.clone(),
+                stop.clone(),
+                Some(process_id),
+            ) {
+                Ok(handle) => return Ok((handle, true)),
+                Err(e) => {
+                    log::warn!(
+                        "Core Audio per-app tap unavailable, trying ScreenCaptureKit: {e}"
+                    );
+                    attempts.push(format!("Core Audio tap (per-app): {e}"));
+                }
+            },
+            None => {
+                log::warn!(
+                    "'{capture_app}' not found via Core Audio process list, \
+                     trying ScreenCaptureKit"
+                );
+            }
+        }
+    } else if !want_app && want_tap {
+        match super::coreaudio_tap::spawn_tap_capture(session_start, tx.clone(), stop.clone(), None)
         {
             Ok(handle) => return Ok((handle, false)),
             Err(e) => {
