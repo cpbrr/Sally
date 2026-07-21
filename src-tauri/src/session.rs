@@ -5,7 +5,10 @@
 //! UI through Tauri events and with commands through a control channel. The
 //! session clock is a monotonic `Instant` (design §5).
 
-use crate::audio::{capture, pipeline::Pipeline, playback::Player, recorder::WavRecorder, RawFrame};
+use crate::audio::{
+    capture, capture::MicCapture, pipeline::Pipeline, playback::Player, recorder::WavRecorder,
+    AudioSource, RawFrame,
+};
 use crate::config::AppConfig;
 use crate::error::{Result, SallyError};
 use crate::gemini::live::{self, LiveEvent};
@@ -41,6 +44,10 @@ const MAX_TURN_DURATION_MS: u64 = 60_000;
 /// accumulates more than this much additional text before splitting anyway
 /// (a speaker who never punctuates must not merge two voices forever).
 const PENDING_SPLIT_MAX_EXTRA_CHARS: usize = 160;
+/// No microphone frames for this long (while not paused) means the device
+/// disconnected — prompt the user to pick a new one instead of silently
+/// translating with a permanently-padded mic lane forever.
+const MIC_LIVENESS_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub enum Control {
     Pause,
@@ -50,6 +57,9 @@ pub enum Control {
     SetReadout(bool),
     /// Change readout volume (0.0–1.0) mid-meeting.
     SetReadoutVolume(f32),
+    /// Restart mic capture on a different device (e.g. after the previous
+    /// one disconnected), without touching system-audio capture.
+    SwitchMic(String),
 }
 
 /// Returned to the command layer when the meeting ends.
@@ -93,13 +103,13 @@ pub fn start(app: AppHandle, config: AppConfig) -> Result<SessionHandle> {
 
     let session_start = Instant::now();
     let (frame_tx, frame_rx) = mpsc::channel::<RawFrame>(256);
-    let capture_handle = capture::start_capture(
+    let (mic_capture, capture_handle) = capture::start_capture(
         &config.mic_device,
         &config.system_device,
         &config.capture_app,
         &config.mac_capture_method,
         session_start,
-        frame_tx,
+        frame_tx.clone(),
     )?;
     if !config.capture_app.is_empty() && !capture_handle.app_capture_active {
         let _ = app.emit(
@@ -123,6 +133,9 @@ pub fn start(app: AppHandle, config: AppConfig) -> Result<SessionHandle> {
         control_rx,
         done_tx,
         capture_handle,
+        mic_capture,
+        frame_tx,
+        session_start,
     ));
 
     Ok(SessionHandle {
@@ -227,6 +240,27 @@ struct Meeting {
     reconnect_rx: Option<oneshot::Receiver<live::LiveConnection>>,
     gap_start_ms: Option<u64>,
     alive: Arc<AtomicBool>,
+    /// Mic capture's own lifecycle, independent of `capture_handle` (system
+    /// audio) — restarted in place on `Control::SwitchMic` without
+    /// affecting system-audio capture at all.
+    mic_capture: MicCapture,
+    /// Clone kept for respawning the mic thread on `Control::SwitchMic`;
+    /// the original passed to `capture::start_capture` was consumed there.
+    frame_tx: mpsc::Sender<RawFrame>,
+    /// Session clock origin, needed to timestamp frames from any mic
+    /// thread spawned after the first (`Control::SwitchMic`) the same way
+    /// as the original.
+    session_start: Instant,
+    /// Wall-clock moment a Microphone-source frame last arrived. Checked
+    /// against `MIC_LIVENESS_TIMEOUT` in `handle_frame` (which keeps
+    /// running off system-audio frames alone even once mic frames stop) to
+    /// detect a disconnected device.
+    last_mic_instant: Instant,
+    /// True once `sally://mic-lost` has been emitted for the current
+    /// disconnect, so the event doesn't fire repeatedly every frame; reset
+    /// when a mic frame arrives again (recovery) or `Control::SwitchMic`
+    /// succeeds.
+    mic_lost: bool,
 }
 
 impl Meeting {
@@ -235,7 +269,21 @@ impl Meeting {
     /// the idle-turn-flush and long-turn-split checks. Only called when the
     /// meeting isn't paused (the caller checks `paused` before this).
     fn handle_frame(&mut self, frame: RawFrame) {
+        let source = frame.source;
         self.pipeline.push(frame);
+        if source == AudioSource::Microphone {
+            self.last_mic_instant = Instant::now();
+            if self.mic_lost {
+                self.mic_lost = false;
+                let _ = self.app.emit("sally://mic-recovered", ());
+            }
+        } else if !self.mic_lost && self.last_mic_instant.elapsed() > MIC_LIVENESS_TIMEOUT {
+            // Checked on every frame (mic or system), so this still fires
+            // even once the mic lane has gone completely silent — system
+            // frames alone keep `handle_frame` running.
+            self.mic_lost = true;
+            let _ = self.app.emit("sally://mic-lost", self.mic_capture.device.clone());
+        }
         while let Some(chunk) = self.pipeline.next_chunk() {
             self.last_chunk_ms = chunk.t_ms;
             // Selecting a specific app/tab as the capture source (per-app
@@ -526,6 +574,9 @@ async fn run_session(
     mut control_rx: mpsc::Receiver<Control>,
     done_tx: oneshot::Sender<Result<ReviewData>>,
     capture_handle: capture::CaptureHandle,
+    mic_capture: MicCapture,
+    frame_tx: mpsc::Sender<RawFrame>,
+    session_start: Instant,
 ) {
     let mut journal_tick = tokio::time::interval(JOURNAL_INTERVAL);
     let alive = Arc::new(AtomicBool::new(true));
@@ -609,6 +660,11 @@ async fn run_session(
         reconnect_rx,
         gap_start_ms: None,
         alive: alive.clone(),
+        mic_capture,
+        frame_tx,
+        session_start,
+        last_mic_instant: Instant::now(),
+        mic_lost: false,
         app,
         config,
         store,
@@ -628,7 +684,28 @@ async fn run_session(
                     }
                     Some(Control::Resume) => {
                         state.paused = false;
+                        // Otherwise the elapsed pause counts toward the mic
+                        // liveness timeout and falsely flags a disconnect
+                        // the instant the first post-resume frame arrives.
+                        state.last_mic_instant = Instant::now();
                         emit_status(&state.app, if state.conn.is_some() { "live" } else { "reconnecting" }, "");
+                    }
+                    Some(Control::SwitchMic(device)) => {
+                        state.mic_capture.stop();
+                        match capture::spawn_mic(device, state.session_start, state.frame_tx.clone()) {
+                            Ok(mc) => {
+                                state.mic_capture = mc;
+                                state.mic_lost = false;
+                                state.last_mic_instant = Instant::now();
+                                let _ = state.app.emit("sally://mic-recovered", ());
+                            }
+                            Err(e) => {
+                                let _ = state.app.emit(
+                                    "sally://warning",
+                                    format!("Couldn't switch microphone: {e}"),
+                                );
+                            }
+                        }
                     }
                     Some(Control::SetReadout(enabled)) => {
                         state.readout_enabled = enabled;
@@ -734,6 +811,7 @@ async fn run_session(
     // immediate.
     alive.store(false, Ordering::SeqCst);
     capture_handle.stop();
+    state.mic_capture.stop();
     finalize_entry(
         &state.app,
         &mut state.assembler,

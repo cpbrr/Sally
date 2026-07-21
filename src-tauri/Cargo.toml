@@ -1,6 +1,6 @@
 [package]
 name = "sally"
-version = "0.17.1"
+version = "0.18.0"
 edition = "2021"
 description = "Floating live translation and transcription for meetings"
 license = "MIT"
@@ -57,7 +57,10 @@ windows = { version = "0.61", features = [
 ] }
 
 [profile.release]
-panic = "abort"
+# panic = "abort" removed: it made any background-thread panic (e.g. the
+# audio callback thread on a mid-meeting device disconnect) kill the whole
+# process instantly. Default unwind lets a panic in one capture thread stay
+# contained to that thread instead of aborting the app.
 codegen-units = 1
 lto = true
 opt-level = "s"

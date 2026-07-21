@@ -33,6 +33,7 @@ interface SallyState {
   pausedAccumMs: number;
   pausedSince: number | null;
   showSettings: boolean;
+  micLost: boolean;
 
   setPhase: (p: Phase) => void;
   setConfig: (c: RedactedConfig | null) => void;
@@ -48,6 +49,7 @@ interface SallyState {
   setPaused: (paused: boolean) => void;
   resetMeeting: () => void;
   setShowSettings: (v: boolean) => void;
+  setMicLost: (v: boolean) => void;
 }
 
 export const useSally = create<SallyState>((set, get) => ({
@@ -68,6 +70,7 @@ export const useSally = create<SallyState>((set, get) => ({
   pausedAccumMs: 0,
   pausedSince: null,
   showSettings: false,
+  micLost: false,
 
   setPhase: (phase) => set({ phase }),
   setConfig: (config) => {
@@ -113,6 +116,8 @@ export const useSally = create<SallyState>((set, get) => ({
       status: "idle",
       statusDetail: "",
       warning: "",
+      micLost: false,
     }),
   setShowSettings: (showSettings) => set({ showSettings }),
+  setMicLost: (micLost) => set({ micLost }),
 }));

@@ -38,6 +38,51 @@ impl CaptureHandle {
     }
 }
 
+/// The microphone capture thread's lifecycle, managed independently of
+/// `CaptureHandle`'s system-audio thread(s) so it can be torn down and
+/// restarted with a different device mid-meeting (e.g. after the original
+/// device is unplugged) without touching system-audio capture at all.
+pub struct MicCapture {
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    pub device: String,
+}
+
+impl MicCapture {
+    /// Stop the current mic thread and join it. Safe to call more than
+    /// once (a second call is a no-op) — both an explicit stop before
+    /// restarting and the `Drop` impl can run without double-joining.
+    pub fn stop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+impl Drop for MicCapture {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+/// Start (or restart) microphone capture alone. Used both for the initial
+/// capture in `start_capture` and to switch devices mid-meeting after the
+/// previous one disconnects.
+pub fn spawn_mic(
+    device_name: String,
+    session_start: Instant,
+    tx: mpsc::Sender<RawFrame>,
+) -> Result<MicCapture> {
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread = spawn_mic_thread(device_name.clone(), session_start, tx, stop.clone())?;
+    Ok(MicCapture {
+        stop,
+        thread: Some(thread),
+        device: device_name,
+    })
+}
+
 pub fn list_input_devices() -> Vec<String> {
     let host = cpal::default_host();
     host.input_devices()
@@ -68,7 +113,9 @@ pub fn list_output_devices() -> Vec<String> {
 /// loopback on Windows, a ScreenCaptureKit app filter on macOS; empty
 /// captures the whole device. `mac_capture_method` overrides macOS's
 /// automatic tap/ScreenCaptureKit choice ("auto", "tap", or
-/// "screencapturekit"); ignored elsewhere.
+/// "screencapturekit"); ignored elsewhere. The mic capture is returned
+/// separately so the caller can restart just that lane (e.g. after the
+/// device disconnects) without touching system-audio capture.
 pub fn start_capture(
     mic_device: &str,
     system_device: &str,
@@ -76,17 +123,12 @@ pub fn start_capture(
     mac_capture_method: &str,
     session_start: Instant,
     tx: mpsc::Sender<RawFrame>,
-) -> Result<CaptureHandle> {
+) -> Result<(MicCapture, CaptureHandle)> {
     let stop = Arc::new(AtomicBool::new(false));
     let mut threads = Vec::new();
     let mut app_capture_active = false;
 
-    threads.push(spawn_mic_thread(
-        mic_device.to_string(),
-        session_start,
-        tx.clone(),
-        stop.clone(),
-    )?);
+    let mic_capture = spawn_mic(mic_device.to_string(), session_start, tx.clone())?;
 
     #[cfg(windows)]
     if !capture_app.is_empty() {
@@ -121,11 +163,14 @@ pub fn start_capture(
         app_capture_active = app_isolated;
     }
 
-    Ok(CaptureHandle {
-        stop,
-        threads,
-        app_capture_active,
-    })
+    Ok((
+        mic_capture,
+        CaptureHandle {
+            stop,
+            threads,
+            app_capture_active,
+        },
+    ))
 }
 
 fn find_by_name(mut devices: impl Iterator<Item = cpal::Device>, name: &str) -> Option<cpal::Device> {

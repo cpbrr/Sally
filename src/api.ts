@@ -105,6 +105,8 @@ export const api = {
     invoke<RedactedConfig>("set_readout", { enabled }),
   setReadoutVolume: (volume: number, persist: boolean) =>
     invoke<RedactedConfig>("set_readout_volume", { volume, persist }),
+  switchMic: (device: string) =>
+    invoke<RedactedConfig>("switch_mic", { device }),
   resumeMeeting: () => invoke<void>("resume_meeting"),
   endMeeting: () => invoke<ReviewInfo>("end_meeting"),
   getLastMeeting: () => invoke<ReviewInfo | null>("get_last_meeting"),
@@ -138,6 +140,19 @@ export function onStatus(cb: (s: StatusPayload) => void): Promise<UnlistenFn> {
 
 export function onWarning(cb: (message: string) => void): Promise<UnlistenFn> {
   return listen<string>("sally://warning", (ev) => cb(ev.payload));
+}
+
+/// Fires when no microphone audio has arrived for a few seconds during a
+/// live meeting (the device disconnected). Payload is the device name that
+/// was in use, for display in the reconnect prompt.
+export function onMicLost(cb: (device: string) => void): Promise<UnlistenFn> {
+  return listen<string>("sally://mic-lost", (ev) => cb(ev.payload));
+}
+
+/// Fires once mic capture is flowing again, either because the same
+/// device came back on its own or `switchMic` succeeded on a new one.
+export function onMicRecovered(cb: () => void): Promise<UnlistenFn> {
+  return listen<null>("sally://mic-recovered", () => cb());
 }
 
 export function formatTimestamp(ms: number): string {
