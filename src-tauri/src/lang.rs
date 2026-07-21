@@ -1,10 +1,10 @@
-//! Lightweight script/language heuristics for the readout gate.
+//! Lightweight script/language heuristics.
 //!
-//! Sally reads translated audio aloud only for passages whose source
-//! language differs from the target language (e.g. target Vietnamese:
-//! English and Japanese speech is read out, Vietnamese speech is not).
-//! Gemini Live Translate detects languages automatically but does not label
-//! per-turn source language, so classification runs locally on the original
+//! Sally splits the transcript into a new entry whenever the spoken
+//! language changes mid-stream, so a switch from Japanese to Vietnamese
+//! mid-meeting doesn't blend two languages into one entry. Gemini Live
+//! Translate detects languages automatically but does not label per-turn
+//! source language, so classification runs locally on the original
 //! transcript text. This is a heuristic: exact for distinct scripts
 //! (Japanese, Korean, Chinese, Thai, Vietnamese diacritics), coarse for
 //! plain-Latin languages, which all map to `latin`.
@@ -129,17 +129,6 @@ pub fn detect(text: &str) -> Option<&'static str> {
     None
 }
 
-/// Whether a passage with this original text should be read aloud when
-/// translating into `target_code`. Passages already in the target language
-/// are skipped; unknown/undetected text is read out (fail open — the user
-/// asked for the translation).
-pub fn should_read_out(original_text: &str, target_code: &str) -> bool {
-    match detect(original_text) {
-        Some(code) => code != target_code,
-        None => true,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,19 +173,6 @@ mod tests {
     fn plain_latin_is_generic() {
         assert_eq!(detect("Let's meet next Friday about the deadline"), Some("latin"));
         assert_eq!(detect("123 …!?"), None);
-    }
-
-    #[test]
-    fn readout_gate_skips_target_language_only() {
-        // Target Vietnamese: EN and JA read out, VI skipped.
-        assert!(should_read_out("next Friday deadline question", "vi"));
-        assert!(should_read_out("来週の金曜日ですか", "vi"));
-        assert!(!should_read_out("hạn chót là thứ Sáu tuần sau phải không", "vi"));
-        // Target Japanese: JA skipped, VI read out.
-        assert!(!should_read_out("承知しました", "ja"));
-        assert!(should_read_out("tôi hiểu rồi ạ", "ja"));
-        // Undetected text fails open.
-        assert!(should_read_out("", "vi"));
     }
 
     #[test]

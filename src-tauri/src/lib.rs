@@ -4,7 +4,6 @@ pub mod config;
 pub mod error;
 pub mod gemini;
 pub mod lang;
-pub mod readout;
 pub mod session;
 pub mod split;
 pub mod store;
