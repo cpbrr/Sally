@@ -217,7 +217,15 @@ export function Settings() {
 
   useEffect(() => {
     api.listAudioDevices().then(setDevices).catch(() => {});
-    refreshApps();
+    // macOS: listing apps goes through ScreenCaptureKit, which triggers
+    // (or checks) the Screen Recording permission — not needed at all
+    // when capture ends up using the Core Audio tap or the whole system.
+    // Only fetch on demand (the refresh button next to the picker) so
+    // opening Settings never touches it. Windows has no such permission
+    // cost, so keep it eager there.
+    if (!isMac()) {
+      refreshApps();
+    }
     // Show the stored key so the box never looks empty after saving.
     api.getApiKey().then(setApiKey).catch(() => {});
   }, []);
