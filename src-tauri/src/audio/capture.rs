@@ -87,6 +87,23 @@ pub fn spawn_mic(
     })
 }
 
+/// Briefly open (and immediately close) the default microphone input
+/// stream, purely to trigger the OS's mic permission prompt (macOS TCC /
+/// Windows privacy consent) at a deliberate moment — the setup wizard's
+/// "permissions" step — instead of letting it fire implicitly at the
+/// first real meeting, where on macOS it can appear right alongside the
+/// separate Screen Recording prompt and get lost behind it. No frames are
+/// read; the receiver is just dropped along with everything else.
+/// Best-effort: a failure here (denied, no device) is swallowed, since
+/// this isn't a real capture and the wizard doesn't gate on it.
+pub fn warm_up_mic_permission() {
+    let (tx, _rx) = mpsc::channel(1);
+    if let Ok(mut mic) = spawn_mic(String::new(), Instant::now(), tx) {
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        mic.stop();
+    }
+}
+
 pub fn list_input_devices() -> Vec<String> {
     let host = cpal::default_host();
     host.input_devices()

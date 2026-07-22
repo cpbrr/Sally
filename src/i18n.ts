@@ -61,7 +61,7 @@ const en = {
   setupPrivacyAccept: "I understand and accept",
   setupPermissions: "Permissions",
   setupPermissionsHint:
-    "Sally needs microphone access and system-audio capture. Grant them when the system asks at the start of your first meeting.",
+    "Sally needs microphone access and system-audio capture. If your system asks for microphone access now, allow it. It'll ask for screen-recording access separately, right after setup finishes.",
   setupTest: "Test connection",
   setupTestRunning: "Testing…",
   setupTestOk: "Connection OK",
@@ -195,7 +195,7 @@ const vi: typeof en = {
   setupPrivacyAccept: "Tôi hiểu và đồng ý",
   setupPermissions: "Quyền truy cập",
   setupPermissionsHint:
-    "Sally cần quyền micrô và thu âm thanh hệ thống. Hãy cấp quyền khi hệ thống hỏi lúc bắt đầu cuộc họp đầu tiên.",
+    "Sally cần quyền micrô và thu âm thanh hệ thống. Nếu hệ thống hỏi quyền micrô ngay bây giờ, hãy cho phép. Quyền ghi màn hình sẽ được hỏi riêng, ngay sau khi hoàn tất cài đặt.",
   setupTest: "Kiểm tra kết nối",
   setupTestRunning: "Đang kiểm tra…",
   setupTestOk: "Kết nối OK",
