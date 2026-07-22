@@ -341,6 +341,13 @@ pub async fn resume_meeting(state: State<'_, AppState>) -> Result<()> {
     send_control(&state, Control::Resume).await
 }
 
+/// Mute/unmute the microphone for the running meeting. Not persisted —
+/// like pause, it's a live-only toggle that resets unmuted next meeting.
+#[tauri::command]
+pub async fn set_mic_muted(state: State<'_, AppState>, muted: bool) -> Result<()> {
+    send_control(&state, Control::SetMicMuted(muted)).await
+}
+
 /// Restart microphone capture on a different device — the prompt shown
 /// when `sally://mic-lost` fires (e.g. the previous device was unplugged
 /// mid-meeting) calls this once the user picks a replacement. Persists the

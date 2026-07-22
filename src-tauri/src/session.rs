@@ -86,6 +86,11 @@ pub enum Control {
     /// (empty = whole system), e.g. after the user changes it in Settings
     /// mid-meeting, without touching mic capture.
     SwitchCaptureApp(String),
+    /// Mute/unmute the microphone. Capture keeps running (liveness tracking
+    /// is unaffected); muted frames are silenced before mixing so no
+    /// transcription happens while muted. Not persisted — resets unmuted
+    /// every meeting, like `Pause`.
+    SetMicMuted(bool),
 }
 
 /// Returned to the command layer when the meeting ends.
@@ -278,6 +283,11 @@ struct Meeting {
     /// when a mic frame arrives again (recovery) or `Control::SwitchMic`
     /// succeeds.
     mic_lost: bool,
+    /// User-toggled mute (`Control::SetMicMuted`). Mic frames still flow
+    /// (capture never stops, liveness tracking is unaffected) but their
+    /// samples are silenced in `handle_frame` before mixing, so a muted
+    /// mic contributes nothing to the transcript.
+    mic_muted: bool,
 }
 
 impl Meeting {
@@ -285,8 +295,14 @@ impl Meeting {
     /// pipeline, feed the recorder/split-detector/live connection, and run
     /// the idle-turn-flush and long-turn-split checks. Only called when the
     /// meeting isn't paused (the caller checks `paused` before this).
-    fn handle_frame(&mut self, frame: RawFrame) {
+    fn handle_frame(&mut self, mut frame: RawFrame) {
         let source = frame.source;
+        if source == AudioSource::Microphone && self.mic_muted {
+            // Silence rather than drop: capture keeps running and mic
+            // liveness tracking below stays accurate, but muted samples
+            // contribute nothing to the mix or transcript.
+            frame.samples.fill(0.0);
+        }
         self.pipeline.push(frame);
         if source == AudioSource::Microphone {
             self.last_mic_instant = Instant::now();
@@ -632,6 +648,7 @@ async fn run_session(
         session_start,
         last_mic_instant: Instant::now(),
         mic_lost: false,
+        mic_muted: false,
         app,
         config,
         store,
@@ -717,6 +734,9 @@ async fn run_session(
                         if let Some(p) = state.player.as_ref() {
                             p.set_volume(state.readout_volume);
                         }
+                    }
+                    Some(Control::SetMicMuted(m)) => {
+                        state.mic_muted = m;
                     }
                     Some(Control::Stop) | None => break,
                 }

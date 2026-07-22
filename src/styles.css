@@ -397,6 +397,11 @@ select:focus, input:focus { outline: 1px solid var(--accent); }
   color: var(--accent);
 }
 .btn.danger { border-color: var(--danger); color: var(--danger); }
+.btn.secondary {
+  background: rgba(230, 196, 106, 0.15);
+  border-color: var(--warn);
+  color: var(--warn);
+}
 .spacer { flex: 1; }
 
 /* ---- Overlays: setup, review, settings, dialogs ---- */

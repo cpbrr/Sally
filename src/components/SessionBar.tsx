@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, formatTimestamp } from "../api";
 import { CornerTools } from "./CornerTools";
-import { IconDoc, IconRefresh, IconWarning } from "./Icons";
+import { IconDoc, IconMic, IconMicOff, IconRefresh, IconWarning } from "./Icons";
 import { useSally } from "../store";
 import { useShallow } from "zustand/react/shallow";
 
@@ -113,6 +113,7 @@ export function SessionBar() {
   const [micChoice, setMicChoice] = useState("");
   const [micSwitching, setMicSwitching] = useState(false);
   const [micError, setMicError] = useState("");
+  const [micMuted, setMicMuted] = useState(false);
 
   const refreshMicDevices = () =>
     api.listAudioDevices().then((d) => setMicInputs(d.inputs)).catch(() => {});
@@ -193,6 +194,9 @@ export function SessionBar() {
       }
       resetMeeting();
       await api.startMeeting(config?.target_language);
+      if (micMuted) {
+        await api.setMicMuted(true).catch(() => {});
+      }
       startMeetingClock();
       setPhase("live");
       setStatus("connecting", "");
@@ -200,6 +204,21 @@ export function SessionBar() {
       setError(String(e));
     } finally {
       setBusy(false);
+    }
+  };
+
+  // Available before a meeting starts too (pre-set like a "join muted"
+  // choice) — applied live below once startMeeting succeeds. During a live
+  // meeting it toggles immediately.
+  const toggleMicMuted = async () => {
+    const next = !micMuted;
+    setMicMuted(next);
+    if (phase === "live") {
+      try {
+        await api.setMicMuted(next);
+      } catch (e) {
+        setError(String(e));
+      }
     }
   };
 
@@ -225,6 +244,8 @@ export function SessionBar() {
       stopMeetingClock();
       setReview(review);
       setPhase("saved");
+      // Backend resets unmuted per meeting; mirror that for the next one.
+      setMicMuted(false);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -271,6 +292,13 @@ export function SessionBar() {
             </button>
           </>
         )}
+        <button
+          className={`btn ${micMuted ? "danger" : ""}`}
+          title={micMuted ? dict.unmuteMic : dict.muteMic}
+          onClick={toggleMicMuted}
+        >
+          {micMuted ? <IconMicOff /> : <IconMic />}
+        </button>
         <span className="spacer" />
         <IssueIndicator
           message={

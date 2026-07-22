@@ -63,6 +63,7 @@ pub fn run() {
             commands::start_meeting,
             commands::pause_meeting,
             commands::resume_meeting,
+            commands::set_mic_muted,
             commands::set_readout,
             commands::set_readout_volume,
             commands::switch_mic,

@@ -109,6 +109,7 @@ export const api = {
   switchCaptureApp: (captureApp: string) =>
     invoke<RedactedConfig>("switch_capture_app", { captureApp }),
   resumeMeeting: () => invoke<void>("resume_meeting"),
+  setMicMuted: (muted: boolean) => invoke<void>("set_mic_muted", { muted }),
   endMeeting: () => invoke<ReviewInfo>("end_meeting"),
   getLastMeeting: () => invoke<ReviewInfo | null>("get_last_meeting"),
   listMeetings: () => invoke<MeetingFile[]>("list_meetings"),
