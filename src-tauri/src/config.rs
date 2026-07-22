@@ -55,7 +55,9 @@ pub struct AppConfig {
     /// "screencapturekit". Ignored on other platforms.
     pub mac_capture_method: String,
     /// Read translated audio aloud for passages not already in the target
-    /// language. Off by default.
+    /// language. Off by default, and never persisted by `set_readout` —
+    /// forced false again on every app launch (`lib.rs`'s setup) so it
+    /// never carries over from a previous session.
     pub readout_enabled: bool,
     /// Live API version (`v1alpha` or `v1beta`). Preview models usually live
     /// on v1alpha; the session flips automatically if setup is rejected.

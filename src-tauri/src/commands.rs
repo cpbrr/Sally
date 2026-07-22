@@ -322,12 +322,15 @@ pub async fn pause_meeting(state: State<'_, AppState>) -> Result<()> {
     send_control(&state, Control::Pause).await
 }
 
-/// Toggle translated-voice readout. Persists to `.env` and applies live to a
-/// running meeting. Playback stays gated per passage: only source languages
-/// that differ from the target are read aloud.
+/// Toggle translated-voice readout. Applies live to a running meeting and
+/// to any later meeting in this same app session, but is deliberately NOT
+/// persisted to `.env` — readout should always start back off the next
+/// time the app launches, not carry over from however the last session
+/// left it. Playback stays gated per passage: only source languages that
+/// differ from the target are read aloud.
 #[tauri::command]
 pub async fn set_readout(state: State<'_, AppState>, enabled: bool) -> Result<RedactedConfig> {
-    let redacted = mutate_config(&state, true, |cfg| cfg.readout_enabled = enabled).await?;
+    let redacted = mutate_config(&state, false, |cfg| cfg.readout_enabled = enabled).await?;
     // Forward to the running session, if any; no meeting running is fine.
     let guard = state.session.lock().await;
     if let Some(session) = guard.as_ref() {
