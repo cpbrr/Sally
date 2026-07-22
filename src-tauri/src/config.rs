@@ -65,8 +65,9 @@ pub struct AppConfig {
     /// uploaded. On by default; SALLY_SAVE_AUDIO=off disables it.
     pub save_audio: bool,
     /// Force a new "line" (timeline entry) every this many sentences in
-    /// the open entry, regardless of speaker. 0 disables it.
-    /// SALLY_SPLIT_LINE_COUNT; defaults to 1.
+    /// the open entry, regardless of speaker. 0 disables it. No Settings
+    /// UI (removed — one fixed value works for everyone); `.env`-only via
+    /// SALLY_SPLIT_LINE_COUNT, defaults to 1.
     pub split_line_count: u32,
     /// Readout playback volume, 0.0–1.0.
     pub readout_volume: f32,
@@ -245,7 +246,6 @@ impl AppConfig {
             mac_capture_method: self.mac_capture_method.clone(),
             readout_enabled: self.readout_enabled,
             readout_volume: self.readout_volume,
-            split_line_count: self.split_line_count,
         }
     }
 }
@@ -265,7 +265,6 @@ pub struct RedactedConfig {
     pub mac_capture_method: String,
     pub readout_enabled: bool,
     pub readout_volume: f32,
-    pub split_line_count: u32,
 }
 
 /// Remove every occurrence of the API key from a message before it can reach

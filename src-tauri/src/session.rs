@@ -41,18 +41,31 @@ const MIN_SPLIT_CHARS: usize = 12;
 const MAX_TURN_DURATION_MS: u64 = 60_000;
 /// Fixed grace window, from the moment a closing entry is created, before
 /// it's drained (sealed) on its own regardless of whether translation is
-/// still streaming in (design note: translation lags the original by "a
-/// couple of seconds" per the two-stage assembler's own doc comment — this
-/// is deliberately a bit longer than that lag). Client-side rotation
-/// triggers (split-line-count, language-change, long-turn-duration) defer
-/// instead of rotating again while a closing entry is still within this
-/// window, so a fast rotation cadence (e.g. `SALLY_SPLIT_LINE_COUNT=1`)
-/// can't seal a closing entry's translation mid-stream and misroute the
-/// rest of it into the wrong (newer) entry. Critically, the window is
-/// fixed at creation, not reset by ongoing translation activity — a
-/// passage that keeps streaming in for many seconds must not be able to
-/// push the deadline back indefinitely and freeze every later rotation.
-const CLOSING_DRAIN_GRACE_MS: u64 = 3_000;
+/// still streaming in. Client-side rotation triggers (split-line-count,
+/// language-change, long-turn-duration) defer instead of rotating again
+/// while a closing entry is still within this window, so a fast rotation
+/// cadence (e.g. `SALLY_SPLIT_LINE_COUNT=1`) can't seal a closing entry's
+/// translation mid-stream and misroute the rest of it into the wrong
+/// (newer) entry. Critically, the window is fixed at creation, not reset
+/// by ongoing translation activity — a passage that keeps streaming in for
+/// many seconds must not be able to push the deadline back indefinitely
+/// and freeze every later rotation.
+///
+/// Tightened from 3000ms (design note: translation lags the original by "a
+/// couple of seconds," so 3000 was chosen as a bit longer than that lag).
+/// Field report: for continuous speech, every `split_line_count` rotation
+/// beyond the first was deferred until this window cleared, so multiple
+/// completed sentences piled up into one growing block instead of each
+/// getting its own line — the deferral, not the split trigger itself, was
+/// the bottleneck. Shortened so lines finalize (and split) closer to real
+/// time; `timeline.rs`'s sentence-punctuation carry-over (added alongside
+/// this) already reduces the cost of sealing before translation fully
+/// catches up, by moving any trailing partial-sentence overflow onto the
+/// next line instead of losing or corrupting it. Translation that hasn't
+/// streamed in AT ALL yet when the window closes still has nowhere better
+/// to go and lands on the next line instead — accepted trade-off for
+/// snappier splitting on fast/continuous speech.
+const CLOSING_DRAIN_GRACE_MS: u64 = 1_000;
 /// No microphone frames for this long (while not paused) means the device
 /// disconnected — prompt the user to pick a new one instead of silently
 /// translating with a permanently-padded mic lane forever.

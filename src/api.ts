@@ -18,7 +18,6 @@ export interface RedactedConfig {
   mac_capture_method: string;
   readout_enabled: boolean;
   readout_volume: number;
-  split_line_count: number;
 }
 
 export interface BootInfo {
@@ -41,7 +40,6 @@ export interface SettingsPayload {
   mac_capture_method?: string;
   readout_enabled?: boolean;
   readout_volume?: number;
-  split_line_count?: number;
 }
 
 export interface AudioDevices {
