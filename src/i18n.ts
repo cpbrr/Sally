@@ -414,6 +414,15 @@ export const TARGET_LANGUAGES = [
   "Chinese",
 ];
 
+// Onboarding pre-selects the matching translation target for the chosen
+// interface language (en -> English, vi -> Vietnamese, ja -> Japanese) —
+// a sensible default the user can still override, not a lock.
+export const UI_TO_TARGET_LANGUAGE: Record<UiLanguage, string> = {
+  en: "English",
+  vi: "Vietnamese",
+  ja: "Japanese",
+};
+
 // Mirror of the Rust-side defaults (config.rs) for the revert buttons.
 export const DEFAULT_LIVE_MODEL = "gemini-3.5-live-translate-preview";
 export const DEFAULT_CLEANUP_MODEL = "gemini-3.1-flash-lite";

@@ -55,8 +55,8 @@ interface SallyState {
 export const useSally = create<SallyState>((set, get) => ({
   phase: "boot",
   config: null,
-  uiLanguage: "en",
-  dict: dictionaries.en,
+  uiLanguage: "vi",
+  dict: dictionaries.vi,
   status: "idle",
   statusDetail: "",
   warning: "",
@@ -75,9 +75,11 @@ export const useSally = create<SallyState>((set, get) => ({
   setPhase: (phase) => set({ phase }),
   setConfig: (config) => {
     const lang = (
-      config?.ui_language === "vi" || config?.ui_language === "ja"
+      config?.ui_language === "en" ||
+      config?.ui_language === "vi" ||
+      config?.ui_language === "ja"
         ? config.ui_language
-        : "en"
+        : "vi"
     ) as UiLanguage;
     set({ config, uiLanguage: lang, dict: dictionaries[lang] });
   },

@@ -5,7 +5,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import { TARGET_LANGUAGES, UiLanguage } from "../i18n";
+import { TARGET_LANGUAGES, UI_TO_TARGET_LANGUAGE, UiLanguage } from "../i18n";
 import { useSally } from "../store";
 import { useShallow } from "zustand/react/shallow";
 
@@ -20,7 +20,9 @@ export function SetupWizard() {
     }))
   );
   const [step, setStep] = useState(0);
-  const [targetLanguage, setTargetLanguage] = useState("Vietnamese");
+  const [targetLanguage, setTargetLanguage] = useState(
+    UI_TO_TARGET_LANGUAGE[uiLanguage]
+  );
   const [apiKey, setApiKey] = useState("");
   const [dataDir, setDataDir] = useState("");
   const [privacyAccepted, setPrivacyAccepted] = useState(false);
@@ -98,7 +100,13 @@ export function SetupWizard() {
               {dict.setupLanguage}
               <select
                 value={uiLanguage}
-                onChange={(e) => setUiLanguage(e.target.value as UiLanguage)}
+                onChange={(e) => {
+                  const lang = e.target.value as UiLanguage;
+                  setUiLanguage(lang);
+                  // Pre-select the matching translation target — a
+                  // sensible default, not a lock; still changeable below.
+                  setTargetLanguage(UI_TO_TARGET_LANGUAGE[lang]);
+                }}
               >
                 <option value="en">English</option>
                 <option value="vi">Tiếng Việt</option>
