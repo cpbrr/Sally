@@ -209,8 +209,44 @@ select:focus, input:focus { outline: 1px solid var(--accent); }
 }
 .volume-slider {
   width: 90px;
-  height: 3px;
+  /* Taller than the visual track on purpose: a bigger vertical hit area
+     around a thin track, and room for a thumb large enough to actually
+     grab instead of needing pixel-accurate aim. */
+  height: 16px;
+  margin: 0;
+  cursor: pointer;
   accent-color: var(--accent);
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+}
+.volume-slider::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border);
+}
+.volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  margin-top: -5px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+}
+.volume-slider::-moz-range-track {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border);
+}
+.volume-slider::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
 }
 .text-size-btn { font-weight: 700; }
 .text-size-btn-small { font-size: 10px; }

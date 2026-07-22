@@ -50,6 +50,12 @@ pub struct Assembler {
     /// speaking, so long silences no longer dilute the ratio (which used to
     /// merge the user's own speech into remote labels).
     mic_attribution_threshold: f32,
+    /// Session-clock ms of the most recent activity on `closing` (the
+    /// moment it was created, or the last `push_translated` append into
+    /// it). Backs `drain_stale_closing` — a rotation that fires before
+    /// `closing`'s translation has caught up must not just seal it with
+    /// the stream cut off mid-passage.
+    closing_last_activity_ms: Option<u64>,
 }
 
 struct OpenEntry {
@@ -68,6 +74,7 @@ impl Assembler {
             closing: None,
             open: None,
             mic_attribution_threshold: 0.5,
+            closing_last_activity_ms: None,
         }
     }
 
@@ -93,11 +100,22 @@ impl Assembler {
     pub fn push_translated(&mut self, text: &str, t_ms: u64) {
         if let Some(e) = self.closing.as_mut() {
             e.translated.push_str(text);
+            self.closing_last_activity_ms = Some(t_ms);
             return;
         }
         let e = self.open_mut(t_ms);
         e.translated.push_str(text);
         e.last_ms = e.last_ms.max(t_ms);
+    }
+
+    /// Whether a closing entry is still pending (created by `rotate_turn`,
+    /// not yet sealed). Client-side rotation triggers (split-line-count,
+    /// language-change, long-turn-duration — none of which have any
+    /// guarantee translation has caught up) should defer instead of
+    /// rotating again while this is true: a second `rotate_turn` call
+    /// seals whatever `closing` has right now, even mid-stream.
+    pub fn has_closing(&self) -> bool {
+        self.closing.is_some()
     }
 
     /// Original text accumulated in the currently open entry only — unlike
@@ -174,7 +192,26 @@ impl Assembler {
     pub fn rotate_turn(&mut self) -> Option<TimelineEntry> {
         let finished = self.closing.take().and_then(|e| self.seal_entry(e));
         self.closing = self.open.take();
+        self.closing_last_activity_ms = self.closing.as_ref().map(|e| e.last_ms);
         finished
+    }
+
+    /// Seal and clear `closing` on its own, without touching `open`, once
+    /// it's had no translation activity for `grace_ms` — the model has
+    /// presumably caught up and stopped streaming for this entry. Callers
+    /// poll this periodically (e.g. once per audio chunk) so a `closing`
+    /// slot a rotation trigger deferred on (`has_closing()`) still drains
+    /// on its own instead of only ever clearing via the next rotation.
+    pub fn drain_stale_closing(&mut self, now_ms: u64, grace_ms: u64) -> Option<TimelineEntry> {
+        let stale = self
+            .closing_last_activity_ms
+            .map(|last| now_ms.saturating_sub(last) >= grace_ms)
+            .unwrap_or(false);
+        if !stale {
+            return None;
+        }
+        self.closing_last_activity_ms = None;
+        self.closing.take().and_then(|e| self.seal_entry(e))
     }
 
     /// Speech-activity signal from the pipeline, once per mixed chunk.
@@ -258,6 +295,7 @@ impl Assembler {
     /// the closing entry first, then the open one, in timeline order.
     pub fn finalize_turn(&mut self) -> Vec<TimelineEntry> {
         let mut out = Vec::new();
+        self.closing_last_activity_ms = None;
         if let Some(e) = self.closing.take() {
             if let Some(entry) = self.seal_entry(e) {
                 out.push(entry);
@@ -376,6 +414,41 @@ mod tests {
         assert_eq!(a.active_translated_text(), "partial one");
         a.push_translated(" continues", 1200);
         assert_eq!(a.active_translated_text(), "partial one continues");
+    }
+
+    #[test]
+    fn stale_closing_drains_without_touching_open() {
+        let mut a = Assembler::new();
+        a.push_original("first speaker words", 1000);
+        assert!(a.rotate_turn().is_none());
+        a.push_original("second speaker words", 1500);
+        assert!(a.has_closing());
+        // Not stale yet: translation could still be streaming in.
+        assert!(a.drain_stale_closing(2_000, 2_500).is_none());
+        assert!(a.has_closing());
+        a.push_translated("bản dịch", 2_200);
+        // Fresh activity resets the clock — still not stale relative to it.
+        assert!(a.drain_stale_closing(3_000, 2_500).is_none());
+        // Now enough time has passed since that last translation activity.
+        let sealed = a.drain_stale_closing(5_000, 2_500).expect("stale seal");
+        assert_eq!(sealed.original, "first speaker words");
+        assert_eq!(sealed.translated, "bản dịch");
+        assert!(!a.has_closing());
+        // The open entry (second speaker) must be untouched throughout.
+        assert_eq!(a.open_original_text(), "second speaker words");
+    }
+
+    #[test]
+    fn rotate_after_stale_drain_does_not_reseal_empty_closing() {
+        let mut a = Assembler::new();
+        a.push_original("one", 0);
+        assert!(a.rotate_turn().is_none());
+        assert!(a.drain_stale_closing(3_000, 2_500).is_some());
+        assert!(!a.has_closing());
+        a.push_original("two", 3_500);
+        // No stale closing left to (re-)seal — only "two" moves to closing.
+        assert!(a.rotate_turn().is_none());
+        assert!(a.has_closing());
     }
 
     #[test]

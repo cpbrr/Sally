@@ -123,8 +123,6 @@ const en = {
   refresh: "Refresh",
   alwaysOnTopDefault: "Always on top by default",
   splitLineCount: "Split every N sentences",
-  splitLineCountHint:
-    "New line every N sentences (split after \".\"), regardless of speaker. 0 disables it.",
   liveModel: "Live model",
   cleanupModel: "Cleanup model",
   version: "Version",
@@ -256,8 +254,6 @@ const vi: typeof en = {
   refresh: "Làm mới",
   alwaysOnTopDefault: "Luôn trên cùng theo mặc định",
   splitLineCount: "Ngắt dòng sau mỗi N câu",
-  splitLineCountHint:
-    "Xuống dòng mới sau mỗi N câu (ngắt sau dấu \".\"), bất kể người nói. 0 để tắt.",
   liveModel: "Mô hình trực tiếp",
   cleanupModel: "Mô hình dọn bản ghi",
   version: "Phiên bản",
