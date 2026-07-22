@@ -1,4 +1,4 @@
-export type UiLanguage = "en" | "vi";
+export type UiLanguage = "en" | "vi" | "ja";
 
 const en = {
   appName: "Sally",
@@ -272,7 +272,139 @@ const vi: typeof en = {
   keepReviewing: "Tiếp tục xem lại",
 };
 
-export const dictionaries = { en, vi };
+const ja: typeof en = {
+  appName: "Sally",
+  statusConnecting: "接続中…",
+  statusLive: "ライブ",
+  statusReconnecting: "再接続中…",
+  statusPaused: "一時停止",
+  statusEnded: "終了",
+  statusIdle: "準備完了",
+  statusStorageError: "保存エラー",
+  pin: "常に最前面に表示",
+  unpin: "最前面表示を解除",
+  readoutOn: "翻訳を読み上げる",
+  readoutOff: "翻訳の読み上げを停止",
+  readoutSetting: "翻訳を読み上げる",
+  readoutVolume: "読み上げ音量",
+  textSizeSmaller: "文字を小さく",
+  textSizeBigger: "文字を大きく",
+  toggleChunkLang: "原文と訳文を切り替え",
+  includeOriginal: "原文を含める",
+  includeOriginalHint:
+    "チェックを外すと、AI整形後のファイルに訳文のみが残り、原文の行は含まれません。",
+  getApiKeyLink: "Google AI Studioで無料のAPIキーを取得",
+  readoutHint:
+    "キャプチャ中の会議やタブの翻訳音声を、どの言語の組み合わせでも読み上げます。ご自身のマイク音声が読み上げられることはなく、文字起こしにのみ表示されます。",
+  settings: "設定",
+  targetLanguage: "翻訳先の言語",
+  transcript: "文字起こし",
+  liveTranslation: "ライブ翻訳",
+  jumpToLive: "最新に戻る",
+  waitingForSpeech: "発話を待っています…",
+  gapMarker: "この区間は文字起こしできませんでした",
+  start: "開始",
+  pause: "一時停止",
+  resume: "再開",
+  endMeeting: "会議を終了",
+  confirmEnd: "この会議を終了しますか?",
+  confirmEndDetail: "元の文字起こしはすでに保存されています。",
+  cancel: "キャンセル",
+  micLostTitle: "マイクの接続が切れました",
+  micLostHint:
+    "会議中にマイクが切断されました。続けるにはデバイスを選び直してください — その間も会議は進行しています。",
+  switchMic: "切り替え",
+  muteMic: "マイクをミュート",
+  unmuteMic: "マイクのミュートを解除",
+  setupTitle: "Sallyへようこそ",
+  setupIntro: "最初の会議の前に、いくつかの手順があります。",
+  setupLanguage: "表示言語",
+  setupApiKey: "Gemini APIキー",
+  setupApiKeyHint:
+    "Sallyのデータフォルダにプレーンテキストで保存されます。このフォルダを読める人は誰でもキーを取得できます。",
+  setupDataFolder: "Sallyのデータフォルダ",
+  chooseFolder: "フォルダを選択…",
+  setupPrivacyTitle: "プライバシーに関する開示",
+  setupPrivacy:
+    "会議の音声は文字起こしと翻訳のためにGoogleのGeminiサービスに送信されます。任意のクリーンアップ処理では文字起こしテキストがGoogleに送信されます。無料枠のAPIキーを使う場合、Googleが製品改善のためにコンテンツを利用することがあります — 会社が承認していない限り、無料枠のキーは社外秘の会議には適さない場合があります。会議音声のローカル録音も文字起こしと一緒に確認用として保存されますが、この端末内にのみ保存され、アップロードされることはありません。",
+  setupPrivacyAccept: "理解して同意します",
+  setupPermissions: "権限",
+  setupPermissionsHint:
+    "Sallyにはマイクとシステム音声キャプチャの権限が必要です。今マイクの権限を求められたら許可してください。画面収録の権限はセットアップ完了直後に別途確認されます。",
+  setupTest: "接続をテスト",
+  setupTestRunning: "テスト中…",
+  setupTestOk: "接続OK",
+  setupTestFailed: "テスト失敗",
+  next: "次へ",
+  back: "戻る",
+  finish: "完了",
+  savedTitle: "録音を保存しました",
+  savedBody: "元の文字起こしは安全にディスクへ保存されています。",
+  close: "閉じる",
+  goToProcessing: "処理画面へ",
+  processingTitle: "文字起こしを処理",
+  processLastMeeting: "直前の会議を処理",
+  openRawFolder: "元データのフォルダを開く",
+  includeTimestamps: "タイムスタンプを含める",
+  includeTimestampsHint:
+    "今回の処理すべてに適用されます。チェックを外すと、タイムスタンプなしの元の文字起こしのコピーも作成されます。",
+  aiCleanup: "AIで整形・要約",
+  aiCleanupHint:
+    "文字起こしのテキストをGeminiに送り、整形済みの要約ファイルを作成します — 話者の推定と、遠隔参加者ごとのラベル付けも行います。",
+  meetingPick: "会議",
+  advanced: "詳細設定",
+  runProcessing: "処理を実行",
+  processingRunning: "処理中…",
+  processingSuccess: "完了しました!ファイルの準備ができています。",
+  openMarkdown: "Markdownを開く",
+  backToApp: "戻る",
+  backToHome: "ホームへ戻る",
+  meetingName: "会議名",
+  done: "完了",
+  recordingTitle: "録音",
+  recordingHint:
+    "文字起こしの行をクリックするとその時点に移動します。再生バーをドラッグしても移動できます。",
+  recoveryTitle: "中断された会議を復元しますか?",
+  recoveryBody:
+    "中断された会議が見つかりました。文字起こしをMarkdownとして復元しますか?",
+  recover: "復元",
+  discard: "今はしない",
+  recovered: "復元済み:",
+  settingsTitle: "設定",
+  micDevice: "マイク",
+  micDeviceHint:
+    "AirPodsなどのBluetoothヘッドセットのマイクは、低品質な通話用モードを強制的に使用します。内蔵マイクの使用をおすすめし、ヘッドセットは音声を聞く用途にのみお使いください。",
+  systemDevice: "システム音声デバイス",
+  systemDefault: "システムのデフォルト",
+  macCaptureMethod: "macOSのキャプチャ方式",
+  macCaptureAuto: "自動(推奨)",
+  macCaptureTap: "Core Audio tap",
+  macCaptureSCK: "ScreenCaptureKit",
+  macCaptureMethodHint:
+    "自動はmacOS 14.4以降ではCore Audio tap(画面収録の権限不要)を選び、それより古いmacOSではScreenCaptureKitにフォールバックします。いずれかの方式が動作しない場合のみ変更してください。",
+  captureSource: "音声のキャプチャ元",
+  entireSystem: "システム全体",
+  captureSourceHint:
+    "エコーを防ぐため、会議アプリを選択してください。このリストに表示されるには、そのアプリが音声を再生している必要があります。",
+  refresh: "更新",
+  alwaysOnTopDefault: "デフォルトで常に最前面に表示",
+  liveModel: "ライブ用モデル",
+  cleanupModel: "整形用モデル",
+  version: "バージョン",
+  save: "保存",
+  saved: "保存しました",
+  errorPrefix: "エラー:",
+  translucent: "ウィンドウを半透明にする",
+  transparency: "ウィンドウの透明度",
+  revertDefault: "デフォルトに戻す",
+  reviewClose: "確認画面を閉じる",
+  reviewCloseConfirm: "確認画面を閉じますか?",
+  reviewCloseBody:
+    "元の文字起こしはすでに保存されています。入力したものの適用していない話者名は失われます。",
+  keepReviewing: "確認を続ける",
+};
+
+export const dictionaries = { en, vi, ja };
 export type Dict = typeof en;
 
 export const TARGET_LANGUAGES = [

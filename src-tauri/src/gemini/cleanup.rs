@@ -112,6 +112,7 @@ fn cleanup_prompt(include_timestamps: bool, include_original: bool, context: &st
 fn summary_prompt(ui_language: &str) -> String {
     let language_name = match ui_language {
         "vi" => "Vietnamese",
+        "ja" => "Japanese",
         _ => "English",
     };
     format!(
@@ -268,9 +269,21 @@ const HEADERS_VI: Headers = Headers {
     due: "hạn",
 };
 
+const HEADERS_JA: Headers = Headers {
+    meeting_notes: "議事録",
+    summary: "要約",
+    key_decisions: "主な決定事項",
+    action_items: "アクションアイテム",
+    open_questions: "未解決の質問",
+    cleaned_transcript: "整形済み文字起こし",
+    none_recorded: "_記録なし。_",
+    due: "期限",
+};
+
 fn headers_for(ui_language: &str) -> &'static Headers {
     match ui_language {
         "vi" => &HEADERS_VI,
+        "ja" => &HEADERS_JA,
         _ => &HEADERS_EN,
     }
 }
@@ -377,6 +390,24 @@ mod tests {
         assert!(out.contains("Prepare demo — Rey (due next Friday)"));
         assert!(out.contains("_None recorded._"));
         assert!(out.contains("cleaned text"));
+    }
+
+    #[test]
+    fn polished_headers_localize_to_japanese() {
+        let summary = MeetingSummary {
+            summary: "short sync".into(),
+            decisions: vec![],
+            action_items: vec![],
+            open_questions: vec![],
+        };
+        let out = render_polished("Weekly", &summary, "cleaned text", "ja");
+        assert!(out.contains("## 要約"));
+        assert!(out.contains("_記録なし。_"));
+        assert_eq!(
+            summary_prompt("ja").contains("Japanese"),
+            true,
+            "summary prompt must ask the model for Japanese output"
+        );
     }
 
     #[test]
