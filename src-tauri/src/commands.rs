@@ -244,6 +244,19 @@ pub async fn list_audio_devices() -> Result<AudioDevices> {
     .map_err(|e| SallyError::Audio(e.to_string()))
 }
 
+/// Setup wizard "permissions" step: trigger the OS mic-permission prompt
+/// deliberately, ahead of the first meeting, so it doesn't collide with
+/// the separate Screen Recording prompt (macOS) that fires later when the
+/// user first reaches the main screen. Fire-and-forget from the UI's
+/// perspective — errors are swallowed inside `warm_up_mic_permission`
+/// itself, so this always returns Ok.
+#[tauri::command]
+pub async fn request_mic_permission() -> Result<()> {
+    tokio::task::spawn_blocking(crate::audio::capture::warm_up_mic_permission)
+        .await
+        .map_err(|e| SallyError::Audio(e.to_string()))
+}
+
 /// Setup step 6: verify the API key and network path without starting a
 /// live session (design §6.3).
 #[tauri::command]

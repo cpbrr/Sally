@@ -101,6 +101,22 @@ export default function App() {
     }))
   );
   const booted = useRef(false);
+  const screenPermRequested = useRef(false);
+
+  // On macOS, listing capture-source apps is what triggers the OS Screen
+  // Recording prompt (it falls through to ScreenCaptureKit whenever
+  // nothing happens to be playing audio at that instant, which is the
+  // common case right here). Firing it once, right as the user reaches
+  // the main screen — after the setup wizard's dedicated step already
+  // triggered the separate mic-permission prompt — keeps the two from
+  // appearing together and one getting lost behind the other. Harmless
+  // on Windows (no such prompt) and a no-op once already granted.
+  useEffect(() => {
+    if (phase === "idle" && !screenPermRequested.current) {
+      screenPermRequested.current = true;
+      api.listAudioApps().catch(() => {});
+    }
+  }, [phase]);
 
   useEffect(() => {
     if (booted.current) return;

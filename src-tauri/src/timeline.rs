@@ -50,12 +50,14 @@ pub struct Assembler {
     /// speaking, so long silences no longer dilute the ratio (which used to
     /// merge the user's own speech into remote labels).
     mic_attribution_threshold: f32,
-    /// Session-clock ms of the most recent activity on `closing` (the
-    /// moment it was created, or the last `push_translated` append into
-    /// it). Backs `drain_stale_closing` — a rotation that fires before
-    /// `closing`'s translation has caught up must not just seal it with
-    /// the stream cut off mid-passage.
-    closing_last_activity_ms: Option<u64>,
+    /// Session-clock ms when `closing` was created (set once by
+    /// `rotate_turn`, never updated afterward). Backs `drain_stale_closing`
+    /// — a fixed grace window from creation, not an idle timer: a rotation
+    /// that fires before `closing`'s translation has caught up must not
+    /// just seal it with the stream cut off mid-passage, but the window
+    /// must also expire on a schedule even if translation keeps trickling
+    /// in, or every later rotation trigger stays blocked indefinitely.
+    closing_since_ms: Option<u64>,
 }
 
 struct OpenEntry {
@@ -74,7 +76,7 @@ impl Assembler {
             closing: None,
             open: None,
             mic_attribution_threshold: 0.5,
-            closing_last_activity_ms: None,
+            closing_since_ms: None,
         }
     }
 
@@ -100,7 +102,13 @@ impl Assembler {
     pub fn push_translated(&mut self, text: &str, t_ms: u64) {
         if let Some(e) = self.closing.as_mut() {
             e.translated.push_str(text);
-            self.closing_last_activity_ms = Some(t_ms);
+            // Deliberately does NOT touch `closing_since_ms` — the drain
+            // deadline is fixed at the moment this entry became closing,
+            // not reset on activity. Continuous translation trickle (very
+            // common; a passage can stream in for many seconds) would
+            // otherwise keep pushing the deadline back indefinitely and
+            // never let `has_closing()` clear, freezing every other
+            // rotation trigger behind it.
             return;
         }
         let e = self.open_mut(t_ms);
@@ -192,25 +200,26 @@ impl Assembler {
     pub fn rotate_turn(&mut self) -> Option<TimelineEntry> {
         let finished = self.closing.take().and_then(|e| self.seal_entry(e));
         self.closing = self.open.take();
-        self.closing_last_activity_ms = self.closing.as_ref().map(|e| e.last_ms);
+        self.closing_since_ms = self.closing.as_ref().map(|e| e.last_ms);
         finished
     }
 
     /// Seal and clear `closing` on its own, without touching `open`, once
-    /// it's had no translation activity for `grace_ms` — the model has
-    /// presumably caught up and stopped streaming for this entry. Callers
-    /// poll this periodically (e.g. once per audio chunk) so a `closing`
-    /// slot a rotation trigger deferred on (`has_closing()`) still drains
-    /// on its own instead of only ever clearing via the next rotation.
+    /// `grace_ms` has passed since it was created — a fixed deadline, not
+    /// an idle timer, so ongoing translation trickle can't push it back
+    /// indefinitely. Callers poll this periodically (e.g. once per audio
+    /// chunk) so a `closing` slot a rotation trigger deferred on
+    /// (`has_closing()`) still drains on its own instead of only ever
+    /// clearing via the next rotation.
     pub fn drain_stale_closing(&mut self, now_ms: u64, grace_ms: u64) -> Option<TimelineEntry> {
         let stale = self
-            .closing_last_activity_ms
-            .map(|last| now_ms.saturating_sub(last) >= grace_ms)
+            .closing_since_ms
+            .map(|since| now_ms.saturating_sub(since) >= grace_ms)
             .unwrap_or(false);
         if !stale {
             return None;
         }
-        self.closing_last_activity_ms = None;
+        self.closing_since_ms = None;
         self.closing.take().and_then(|e| self.seal_entry(e))
     }
 
@@ -295,7 +304,7 @@ impl Assembler {
     /// the closing entry first, then the open one, in timeline order.
     pub fn finalize_turn(&mut self) -> Vec<TimelineEntry> {
         let mut out = Vec::new();
-        self.closing_last_activity_ms = None;
+        self.closing_since_ms = None;
         if let Some(e) = self.closing.take() {
             if let Some(entry) = self.seal_entry(e) {
                 out.push(entry);
@@ -427,15 +436,38 @@ mod tests {
         assert!(a.drain_stale_closing(2_000, 2_500).is_none());
         assert!(a.has_closing());
         a.push_translated("bản dịch", 2_200);
-        // Fresh activity resets the clock — still not stale relative to it.
-        assert!(a.drain_stale_closing(3_000, 2_500).is_none());
-        // Now enough time has passed since that last translation activity.
+        // Now enough time has passed since the entry became closing.
         let sealed = a.drain_stale_closing(5_000, 2_500).expect("stale seal");
         assert_eq!(sealed.original, "first speaker words");
         assert_eq!(sealed.translated, "bản dịch");
         assert!(!a.has_closing());
         // The open entry (second speaker) must be untouched throughout.
         assert_eq!(a.open_original_text(), "second speaker words");
+    }
+
+    #[test]
+    fn stale_closing_deadline_is_not_reset_by_translation_activity() {
+        // Regression test: v1.1.1 reset the drain deadline on every
+        // `push_translated` into `closing`, so a passage that kept
+        // streaming translation for many seconds (common — translation
+        // genuinely takes a while) could keep the deadline pushed back
+        // forever, permanently blocking every later rotation trigger
+        // gated on `!has_closing()`. The deadline must be fixed at
+        // creation time, not extended by ongoing activity.
+        let mut a = Assembler::new();
+        a.push_original("first speaker words", 1000);
+        assert!(a.rotate_turn().is_none());
+        a.push_original("second speaker words", 1500);
+        // Translation keeps trickling in well past where the old
+        // (buggy) activity-reset behavior would have kept pushing the
+        // deadline back — this must not stop it from going stale.
+        a.push_translated("một ", 2_000);
+        a.push_translated("hai ", 3_000);
+        a.push_translated("ba", 3_900);
+        let sealed = a.drain_stale_closing(4_000, 2_500).expect("stale seal");
+        assert_eq!(sealed.original, "first speaker words");
+        assert_eq!(sealed.translated, "một hai ba");
+        assert!(!a.has_closing());
     }
 
     #[test]

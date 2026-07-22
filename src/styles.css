@@ -192,6 +192,13 @@ select:focus, input:focus { outline: 1px solid var(--accent); }
   display: flex;
   flex-direction: row-reverse;
   align-items: center;
+  /* Invisible hover margin: without this, the hover hit area is exactly
+     the button + revealed slider's own box, so a tiny mouse overshoot
+     past the slider's edge collapses it instantly. The negative margin
+     cancels the padding's layout effect, so title-bar spacing looks the
+     same — only the hoverable/hidable area grows. */
+  padding: 12px 10px;
+  margin: -12px -10px;
 }
 .volume-slider-track {
   display: flex;

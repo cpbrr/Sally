@@ -3,7 +3,7 @@
 
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { UiLanguage } from "../i18n";
 import { useSally } from "../store";
@@ -25,8 +25,22 @@ export function SetupWizard() {
   const [privacyAccepted, setPrivacyAccepted] = useState(false);
   const [testState, setTestState] = useState<"idle" | "running" | "ok" | "failed">("idle");
   const [error, setError] = useState("");
+  const micPermissionRequested = useRef(false);
 
   const totalSteps = 6;
+
+  // Trigger the OS mic-permission prompt right here, on the dedicated
+  // "permissions" step — deliberately ahead of the Screen Recording
+  // prompt, which only fires later once the user reaches the main screen
+  // (App.tsx). Requesting both around the same moment (previously: both
+  // deferred to the first meeting) let one appear behind the other and
+  // get missed.
+  useEffect(() => {
+    if (step === 4 && !micPermissionRequested.current) {
+      micPermissionRequested.current = true;
+      api.requestMicPermission().catch(() => {});
+    }
+  }, [step]);
 
   const pickFolder = async () => {
     const dir = await open({ directory: true, multiple: false });

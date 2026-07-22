@@ -39,15 +39,19 @@ const MIN_SPLIT_CHARS: usize = 12;
 /// boundary is split anyway, so one uninterrupted speaker never accumulates
 /// an unreadably long block ("split every minute").
 const MAX_TURN_DURATION_MS: u64 = 60_000;
-/// How long a closing entry can go without new translation activity before
-/// it's presumed caught up and drained on its own (design note: translation
-/// lags the original by "a couple of seconds" per the two-stage assembler's
-/// own doc comment — this is deliberately a bit longer than that lag).
-/// Client-side rotation triggers (split-line-count, language-change,
-/// long-turn-duration) defer instead of rotating again while a closing
-/// entry is still within this window, so a fast rotation cadence (e.g.
-/// `SALLY_SPLIT_LINE_COUNT=1`) can't seal a closing entry's translation
-/// mid-stream and misroute the rest of it into the wrong (newer) entry.
+/// Fixed grace window, from the moment a closing entry is created, before
+/// it's drained (sealed) on its own regardless of whether translation is
+/// still streaming in (design note: translation lags the original by "a
+/// couple of seconds" per the two-stage assembler's own doc comment — this
+/// is deliberately a bit longer than that lag). Client-side rotation
+/// triggers (split-line-count, language-change, long-turn-duration) defer
+/// instead of rotating again while a closing entry is still within this
+/// window, so a fast rotation cadence (e.g. `SALLY_SPLIT_LINE_COUNT=1`)
+/// can't seal a closing entry's translation mid-stream and misroute the
+/// rest of it into the wrong (newer) entry. Critically, the window is
+/// fixed at creation, not reset by ongoing translation activity — a
+/// passage that keeps streaming in for many seconds must not be able to
+/// push the deadline back indefinitely and freeze every later rotation.
 const CLOSING_DRAIN_GRACE_MS: u64 = 3_000;
 /// No microphone frames for this long (while not paused) means the device
 /// disconnected — prompt the user to pick a new one instead of silently

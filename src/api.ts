@@ -96,6 +96,7 @@ export const api = {
   saveSettings: (payload: SettingsPayload) =>
     invoke<RedactedConfig>("save_settings", { payload }),
   listAudioDevices: () => invoke<AudioDevices>("list_audio_devices"),
+  requestMicPermission: () => invoke<void>("request_mic_permission"),
   listAudioApps: () => invoke<string[]>("list_audio_apps"),
   testConnectivity: () => invoke<boolean>("test_connectivity"),
   startMeeting: (targetLanguage?: string) =>
