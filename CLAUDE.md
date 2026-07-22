@@ -1,8 +1,9 @@
 # Sally — project instructions for Claude
 
-Tauri 2 + React/TS + Rust live-translation app. Windows is the only active
-target (macOS CI job is manual-dispatch only). User iterates via GitHub
-Releases.
+Tauri 2 + React/TS + Rust live-translation app. Windows and macOS (Apple
+Silicon) both build automatically on every tagged release; Windows is the
+primary dev/test target since this box can't run macOS itself. User
+iterates via GitHub Releases.
 
 ## Build & test
 
@@ -30,8 +31,10 @@ When a change is done and tested, run the full pipeline without asking:
 4. Push, `gh pr create`, then `gh pr merge <N> --merge` (merge commit, not
    squash).
 5. On `main`: `git tag vX.Y.Z && git push origin vX.Y.Z`. CI (release.yml)
-   builds the Windows portable ZIP and creates a draft release (~8-10 min).
-   Watch with `gh run watch` in the background.
+   builds the Windows portable ZIP and the macOS DMG in parallel and
+   creates one draft release with both attached (~8-10 min; the release
+   job waits on both platform jobs, mac is the slower leg). Watch with
+   `gh run watch` in the background.
 6. When CI is green, publish:
    `gh release edit vX.Y.Z --title "Sally vX.Y.Z" --notes-file <file> --draft=false --prerelease`
    ALWAYS `--prerelease`, NEVER `--latest` — the user promotes releases
@@ -57,32 +60,44 @@ Claude-Session trailer as commits.
   2. `## Downloads` table — **always include the header + separator row**,
      even for a single-platform table (v0.14.0–v0.15.0 shipped without them:
      GitHub silently renders a headerless table as raw pipe-text, not a
-     table — caught and fixed retroactively in v0.17.1):
+     table — caught and fixed retroactively in v0.17.1). Both rows are the
+     default now that mac builds automatically alongside Windows on every
+     tag (see macOS build below) — the release job waits on both, so by
+     the time the draft exists both files are already attached:
      ```
      | Platform | File | Notes |
      |---|---|---|
      | Windows 11 x64 | Sally-windows-x64-portable.zip | Portable — unzip anywhere, run Sally.exe. |
      | macOS 13+ Apple Silicon | Sally-macos-aarch64.dmg | Ad-hoc signed — right-click → Open on first launch, or `xattr -cr` if macOS calls it "damaged." |
      ```
-     The macOS row only applies once the mac job has actually been
-     dispatched and its DMG attached to that release (mac is
-     manual-dispatch-only, see below) — if that happens *after* the notes
-     were first published, go back and add the row (v0.17.0/v0.17.1 shipped
-     without it, fixed retroactively same session).
+     Only omit the macOS row for the rare release where the mac leg
+     genuinely failed and shipping Windows alone couldn't wait — go back
+     and add the row once a retroactive mac build lands (same manual-attach
+     flow as macOS build below).
   3. `## Why <previous version> failed` (or `## Why remove it` etc.) —
      honest plain-language account of the problem.
   4. `## What changed` — bold-led bullets, user-facing wording.
   5. Closing "Expected behavior" line where it applies.
 
-## macOS build (manual-dispatch only, not part of default ship pipeline)
+## macOS build (part of the default ship pipeline since v1.1.1)
 
-Tag-push only builds Windows. If the user asks for the mac build:
-`gh workflow run release.yml --ref main`, watch it, then
+Every `vX.Y.Z` tag push builds macOS alongside Windows (`release.yml`'s
+`macos` job, `runs-on: macos-26` — required by the screencapturekit crate's
+Swift bridge). The `release` job's `needs: [windows, macos]` means the
+draft release only gets created once both finish, so a normal ship needs
+no separate mac step — the DMG is already attached by the time you publish.
+
+Manual dispatch still exists for one edge case: retroactively attaching a
+mac build to an **older already-published release** (e.g. one shipped
+before this policy changed, or where the mac leg failed and had to be
+retried separately). Pin `--ref` to the exact tag being retrofitted, not
+`main`, so the DMG matches that release's code — building against `main`
+would attach a DMG running newer code than the release label says:
+`gh workflow run release.yml --ref vX.Y.Z`, watch it, then
 `gh run download <run-id> -n sally-macos-aarch64 -D <dir>` and
 `gh release upload vX.Y.Z <dir>/Sally-macos-aarch64.dmg <dir>/Sally-macos-aarch64.dmg.sha256`
-onto the already-published release. Remember to add the macOS row to that
-release's notes per above — it's easy to attach the asset and forget the
-table.
+onto that release. Remember to add the macOS row to that release's notes
+per above — it's easy to attach the asset and forget the table.
 
 ## After shipping
 

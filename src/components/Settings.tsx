@@ -153,7 +153,6 @@ function AdvancedSettings({
               }
             />
           </label>
-          <p className="field-hint">{dict.splitLineCountHint}</p>
 
           <label>
             {dict.liveModel}
@@ -231,7 +230,7 @@ export function Settings() {
     live_model: config?.live_model ?? "",
     cleanup_model: config?.cleanup_model ?? "",
     mac_capture_method: config?.mac_capture_method ?? "auto",
-    split_line_count: config?.split_line_count ?? 3,
+    split_line_count: config?.split_line_count ?? 1,
   });
   const [error, setError] = useState("");
   const [translucent, setTranslucentState] = useState(isTranslucent());

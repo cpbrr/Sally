@@ -33,7 +33,7 @@ pub const DEFAULT_LIVE_API_VERSION: &str = "v1beta";
 
 /// Default for `split_line_count`: force a new line every this many
 /// sentences in the open entry, regardless of speaker.
-pub const DEFAULT_SPLIT_LINE_COUNT: u32 = 3;
+pub const DEFAULT_SPLIT_LINE_COUNT: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -66,7 +66,7 @@ pub struct AppConfig {
     pub save_audio: bool,
     /// Force a new "line" (timeline entry) every this many sentences in
     /// the open entry, regardless of speaker. 0 disables it.
-    /// SALLY_SPLIT_LINE_COUNT; defaults to 3.
+    /// SALLY_SPLIT_LINE_COUNT; defaults to 1.
     pub split_line_count: u32,
     /// Readout playback volume, 0.0–1.0.
     pub readout_volume: f32,

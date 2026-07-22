@@ -4,7 +4,9 @@
 #   secrets are configured — signing/notarization per design §12.2 is a
 #   separate step once certificates exist)
 #
-# Runs on version tags (v*) and manually via workflow_dispatch.
+# Both platforms build on every version tag (v*) and on manual
+# workflow_dispatch; the release job (tag pushes only) waits for both and
+# publishes one draft release with everything attached.
 
 name: release
 
@@ -46,10 +48,8 @@ jobs:
             Sally-windows-x64-portable.zip.sha256
 
   macos:
-    # Windows is the current focus; build macOS only on manual dispatch.
     # macos-26: the screencapturekit crate's apple-metal Swift bridge
     # compiles against the Xcode 26 SDK (MTLSamplerReductionMode et al.).
-    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
@@ -95,7 +95,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [windows]
+    needs: [windows, macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
