@@ -30,7 +30,6 @@ type SettingsForm = {
   live_model: string;
   cleanup_model: string;
   mac_capture_method: string;
-  split_line_count: number;
 };
 
 function AdvancedSettings({
@@ -139,22 +138,6 @@ function AdvancedSettings({
           </label>
 
           <label>
-            {dict.splitLineCount}
-            <input
-              type="number"
-              min={0}
-              max={20}
-              value={form.split_line_count}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  split_line_count: Math.max(0, Number(e.target.value)),
-                })
-              }
-            />
-          </label>
-
-          <label>
             {dict.liveModel}
             <div className="row">
               <input
@@ -230,7 +213,6 @@ export function Settings() {
     live_model: config?.live_model ?? "",
     cleanup_model: config?.cleanup_model ?? "",
     mac_capture_method: config?.mac_capture_method ?? "auto",
-    split_line_count: config?.split_line_count ?? 1,
   });
   const [error, setError] = useState("");
   const [translucent, setTranslucentState] = useState(isTranslucent());
