@@ -5,7 +5,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import { UiLanguage } from "../i18n";
+import { TARGET_LANGUAGES, UiLanguage } from "../i18n";
 import { useSally } from "../store";
 import { useShallow } from "zustand/react/shallow";
 
@@ -20,6 +20,7 @@ export function SetupWizard() {
     }))
   );
   const [step, setStep] = useState(0);
+  const [targetLanguage, setTargetLanguage] = useState("Vietnamese");
   const [apiKey, setApiKey] = useState("");
   const [dataDir, setDataDir] = useState("");
   const [privacyAccepted, setPrivacyAccepted] = useState(false);
@@ -55,6 +56,7 @@ export function SetupWizard() {
         data_dir: dataDir,
         api_key: apiKey,
         ui_language: uiLanguage,
+        target_language: targetLanguage,
       });
       setConfig(cfg);
       await api.testConnectivity();
@@ -100,6 +102,19 @@ export function SetupWizard() {
               >
                 <option value="en">English</option>
                 <option value="vi">Tiếng Việt</option>
+              </select>
+            </label>
+            <label>
+              {dict.targetLanguage}
+              <select
+                value={targetLanguage}
+                onChange={(e) => setTargetLanguage(e.target.value)}
+              >
+                {TARGET_LANGUAGES.map((l) => (
+                  <option key={l} value={l}>
+                    {l}
+                  </option>
+                ))}
               </select>
             </label>
           </>
