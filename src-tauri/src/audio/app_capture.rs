@@ -191,3 +191,42 @@ pub fn spawn_app_capture(
         let _ = client.stop_stream();
     })
 }
+
+#[cfg(test)]
+mod diagnostic {
+    // Manual, hardware-dependent sanity check — not part of the normal
+    // suite (needs a real Windows audio stack), run explicitly with
+    // `cargo test --manifest-path src-tauri/Cargo.toml -- --ignored --nocapture app_capture`.
+    use super::*;
+
+    #[test]
+    #[ignore]
+    fn list_and_capture_one_app() {
+        let apps = list_audio_apps();
+        println!("audio sessions found: {}", apps.len());
+        for a in &apps {
+            println!("  pid={} name={}", a.pid, a.name);
+        }
+        let Some(app) = apps.first() else {
+            println!("no audio sessions to test capture against");
+            return;
+        };
+        println!("attempting per-app capture on: {}", app.name);
+        let stop = Arc::new(AtomicBool::new(false));
+        let (tx, mut rx) = mpsc::channel::<RawFrame>(256);
+        let handle = spawn_app_capture(app.pid, Instant::now(), tx, stop.clone())
+            .expect("spawn_app_capture failed to start");
+        let mut frames = 0u32;
+        let mut total_samples = 0usize;
+        let start = std::time::Instant::now();
+        while start.elapsed() < std::time::Duration::from_secs(2) {
+            if let Ok(frame) = rx.try_recv() {
+                frames += 1;
+                total_samples += frame.samples.len();
+            }
+        }
+        stop.store(true, Ordering::SeqCst);
+        let _ = handle.join();
+        println!("received {frames} frames, {total_samples} samples in 2s");
+    }
+}
