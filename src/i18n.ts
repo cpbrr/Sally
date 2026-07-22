@@ -15,7 +15,6 @@ const en = {
   unpin: "Stop keeping on top",
   readoutOn: "Read translation aloud",
   readoutOff: "Stop reading translation aloud",
-  readoutSetting: "Read translation aloud",
   readoutVolume: "Readout volume",
   textSizeSmaller: "Smaller text",
   textSizeBigger: "Bigger text",
@@ -24,8 +23,6 @@ const en = {
   includeOriginalHint:
     "Untick to have the AI-cleaned file carry only the translation, without the original-language lines.",
   getApiKeyLink: "Get a free API key at Google AI Studio",
-  readoutHint:
-    "Speaks the translated voice for the meeting/tab you're capturing, in any language pair. Your own microphone speech is never read back — it only ever appears in the transcript.",
   settings: "Settings",
   targetLanguage: "Target language",
   // panels
@@ -123,21 +120,13 @@ const en = {
   captureSourceHint:
     "Select the meeting app to prevent echo. The app must be playing audio to appear in this list.",
   refresh: "Refresh",
-  alwaysOnTopDefault: "Always on top by default",
   liveModel: "Live model",
   cleanupModel: "Cleanup model",
   version: "Version",
   save: "Save",
-  saved: "Saved",
-  errorPrefix: "Error:",
   translucent: "Translucent window",
   transparency: "Window transparency",
   revertDefault: "Reset to default",
-  reviewClose: "Close review",
-  reviewCloseConfirm: "Close the review?",
-  reviewCloseBody:
-    "The raw transcript is already saved. Speaker names you typed but did not apply will be lost.",
-  keepReviewing: "Keep reviewing",
 };
 
 const vi: typeof en = {
@@ -153,7 +142,6 @@ const vi: typeof en = {
   unpin: "Bỏ giữ trên cùng",
   readoutOn: "Đọc to bản dịch",
   readoutOff: "Tắt đọc to bản dịch",
-  readoutSetting: "Đọc to bản dịch",
   readoutVolume: "Âm lượng đọc",
   textSizeSmaller: "Chữ nhỏ hơn",
   textSizeBigger: "Chữ lớn hơn",
@@ -162,8 +150,6 @@ const vi: typeof en = {
   includeOriginalHint:
     "Bỏ chọn để tệp AI dọn chỉ giữ bản dịch, không kèm các dòng ngôn ngữ gốc.",
   getApiKeyLink: "Lấy khóa API miễn phí tại Google AI Studio",
-  readoutHint:
-    "Phát giọng dịch cho cuộc họp/tab bạn đang thu, với mọi cặp ngôn ngữ. Giọng nói của chính bạn qua micrô không bao giờ được đọc lại — chỉ xuất hiện trong bản ghi chữ.",
   settings: "Cài đặt",
   targetLanguage: "Ngôn ngữ đích",
   transcript: "Bản gốc",
@@ -255,21 +241,13 @@ const vi: typeof en = {
   captureSourceHint:
     "Chọn ứng dụng họp để tránh tiếng vọng. Ứng dụng phải đang phát âm thanh mới xuất hiện trong danh sách.",
   refresh: "Làm mới",
-  alwaysOnTopDefault: "Luôn trên cùng theo mặc định",
   liveModel: "Mô hình trực tiếp",
   cleanupModel: "Mô hình dọn bản ghi",
   version: "Phiên bản",
   save: "Lưu",
-  saved: "Đã lưu",
-  errorPrefix: "Lỗi:",
   translucent: "Cửa sổ trong mờ",
   transparency: "Độ trong suốt cửa sổ",
   revertDefault: "Khôi phục mặc định",
-  reviewClose: "Đóng phần xem lại",
-  reviewCloseConfirm: "Đóng phần xem lại?",
-  reviewCloseBody:
-    "Bản ghi thô đã được lưu. Tên người nói bạn đã nhập nhưng chưa áp dụng sẽ bị mất.",
-  keepReviewing: "Tiếp tục xem lại",
 };
 
 const ja: typeof en = {
@@ -285,7 +263,6 @@ const ja: typeof en = {
   unpin: "最前面表示を解除",
   readoutOn: "翻訳を読み上げる",
   readoutOff: "翻訳の読み上げを停止",
-  readoutSetting: "翻訳を読み上げる",
   readoutVolume: "読み上げ音量",
   textSizeSmaller: "文字を小さく",
   textSizeBigger: "文字を大きく",
@@ -294,8 +271,6 @@ const ja: typeof en = {
   includeOriginalHint:
     "チェックを外すと、AI整形後のファイルに訳文のみが残り、原文の行は含まれません。",
   getApiKeyLink: "Google AI Studioで無料のAPIキーを取得",
-  readoutHint:
-    "キャプチャ中の会議やタブの翻訳音声を、どの言語の組み合わせでも読み上げます。ご自身のマイク音声が読み上げられることはなく、文字起こしにのみ表示されます。",
   settings: "設定",
   targetLanguage: "翻訳先の言語",
   transcript: "文字起こし",
@@ -387,21 +362,13 @@ const ja: typeof en = {
   captureSourceHint:
     "エコーを防ぐため、会議アプリを選択してください。このリストに表示されるには、そのアプリが音声を再生している必要があります。",
   refresh: "更新",
-  alwaysOnTopDefault: "デフォルトで常に最前面に表示",
   liveModel: "ライブ用モデル",
   cleanupModel: "整形用モデル",
   version: "バージョン",
   save: "保存",
-  saved: "保存しました",
-  errorPrefix: "エラー:",
   translucent: "ウィンドウを半透明にする",
   transparency: "ウィンドウの透明度",
   revertDefault: "デフォルトに戻す",
-  reviewClose: "確認画面を閉じる",
-  reviewCloseConfirm: "確認画面を閉じますか?",
-  reviewCloseBody:
-    "元の文字起こしはすでに保存されています。入力したものの適用していない話者名は失われます。",
-  keepReviewing: "確認を続ける",
 };
 
 export const dictionaries = { en, vi, ja };

@@ -7,9 +7,8 @@ use crate::gemini::cleanup::{render_polished, split_sections, CleanupClient, SEC
 use crate::session::{Control, ReviewData, SessionHandle};
 use crate::store::MeetingStore;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::path::PathBuf;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Manager, State};
 use tokio::sync::Mutex;
 
 #[derive(Default)]
