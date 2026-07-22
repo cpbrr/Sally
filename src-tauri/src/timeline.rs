@@ -69,6 +69,30 @@ struct OpenEntry {
     speech_chunks: u32,
 }
 
+/// Splits translated text at its own last sentence-ending punctuation,
+/// returning `(sealed, carry)`. Translation lags the original, so a
+/// rotation timed off the *original* text's sentence boundary lands at an
+/// arbitrary point in the translated stream — often a few words into (or
+/// short of) its own sentence end. Snapping to translated's own last
+/// terminator and carrying the remainder into the next entry keeps each
+/// entry's translation aligned to its own sentence instead of a real-time
+/// cutoff. If no terminator is present yet, nothing is carried (same as
+/// before) — this can only improve on a period that already arrived.
+fn split_translated_carry(text: &str) -> (String, String) {
+    let mut cut = None;
+    for (i, c) in text.char_indices() {
+        if SENTENCE_END.contains(&c) {
+            cut = Some(i + c.len_utf8());
+        }
+    }
+    match cut {
+        Some(end) if end < text.len() => {
+            (text[..end].trim().to_string(), text[end..].trim_start().to_string())
+        }
+        _ => (text.trim().to_string(), String::new()),
+    }
+}
+
 impl Assembler {
     pub fn new() -> Self {
         Self {
@@ -78,6 +102,27 @@ impl Assembler {
             mic_attribution_threshold: 0.5,
             closing_since_ms: None,
         }
+    }
+
+    /// Prepends translation-split overflow (see `split_translated_carry`)
+    /// into whichever entry `push_translated` would route to right now —
+    /// same closing-takes-priority rule, so overshoot words land at the
+    /// front of the next entry's translation instead of being lost or
+    /// stuck behind the sentence they don't belong to.
+    fn prepend_translated_carry(&mut self, carry: String, t_ms: u64) {
+        if carry.is_empty() {
+            return;
+        }
+        let target = if let Some(e) = self.closing.as_mut() {
+            &mut e.translated
+        } else {
+            &mut self.open_mut(t_ms).translated
+        };
+        *target = if target.is_empty() {
+            carry
+        } else {
+            format!("{carry} {target}")
+        };
     }
 
     fn open_mut(&mut self, t_ms: u64) -> &mut OpenEntry {
@@ -198,10 +243,18 @@ impl Assembler {
     /// translation finish streaming. Any previously closing entry is
     /// finalized and returned.
     pub fn rotate_turn(&mut self) -> Option<TimelineEntry> {
-        let finished = self.closing.take().and_then(|e| self.seal_entry(e));
+        let old_closing = self.closing.take();
         self.closing = self.open.take();
         self.closing_since_ms = self.closing.as_ref().map(|e| e.last_ms);
-        finished
+        old_closing.and_then(|e| {
+            let carry_t_ms = e.last_ms;
+            let (sealed_translated, carry) = split_translated_carry(&e.translated);
+            self.prepend_translated_carry(carry, carry_t_ms);
+            self.seal_entry(OpenEntry {
+                translated: sealed_translated,
+                ..e
+            })
+        })
     }
 
     /// Seal and clear `closing` on its own, without touching `open`, once
@@ -220,7 +273,15 @@ impl Assembler {
             return None;
         }
         self.closing_since_ms = None;
-        self.closing.take().and_then(|e| self.seal_entry(e))
+        self.closing.take().and_then(|e| {
+            let carry_t_ms = e.last_ms;
+            let (sealed_translated, carry) = split_translated_carry(&e.translated);
+            self.prepend_translated_carry(carry, carry_t_ms);
+            self.seal_entry(OpenEntry {
+                translated: sealed_translated,
+                ..e
+            })
+        })
     }
 
     /// Speech-activity signal from the pipeline, once per mixed chunk.
@@ -306,7 +367,13 @@ impl Assembler {
         let mut out = Vec::new();
         self.closing_since_ms = None;
         if let Some(e) = self.closing.take() {
-            if let Some(entry) = self.seal_entry(e) {
+            let carry_t_ms = e.last_ms;
+            let (sealed_translated, carry) = split_translated_carry(&e.translated);
+            self.prepend_translated_carry(carry, carry_t_ms);
+            if let Some(entry) = self.seal_entry(OpenEntry {
+                translated: sealed_translated,
+                ..e
+            }) {
                 out.push(entry);
             }
         }
@@ -481,6 +548,43 @@ mod tests {
         // No stale closing left to (re-)seal — only "two" moves to closing.
         assert!(a.rotate_turn().is_none());
         assert!(a.has_closing());
+    }
+
+    #[test]
+    fn translated_overshoot_carries_to_next_entry() {
+        // Regression test: translation lags the original, so a rotation
+        // timed off the original's sentence boundary can capture a few
+        // words of the *next* sentence's translation too. Those words
+        // must move to the following entry instead of sticking to this
+        // one's tail.
+        let mut a = Assembler::new();
+        a.push_original("first speaker words", 1000);
+        assert!(a.rotate_turn().is_none());
+        a.push_original("second speaker words", 3000);
+        // Translation overshoots: includes the start of the next
+        // sentence before the rotation catches up.
+        a.push_translated("First sentence done. And, first", 3200);
+        let sealed = a.rotate_turn().expect("first entry sealed");
+        assert_eq!(sealed.translated, "First sentence done.");
+        // Overshoot words now sit at the front of the new closing entry.
+        a.push_translated(" I wanted to ask you something.", 3400);
+        let entries = a.finalize_turn();
+        assert_eq!(entries[0].original, "second speaker words");
+        assert_eq!(entries[0].translated, "And, first I wanted to ask you something.");
+    }
+
+    #[test]
+    fn translated_without_punctuation_is_not_split() {
+        // No sentence terminator yet: keep current (pre-fix) behavior —
+        // take everything, carry nothing, since there's no better cut
+        // point available.
+        let mut a = Assembler::new();
+        a.push_original("one", 0);
+        assert!(a.rotate_turn().is_none());
+        a.push_original("two", 1000);
+        a.push_translated("một hai ba", 1100);
+        let sealed = a.rotate_turn().expect("sealed");
+        assert_eq!(sealed.translated, "một hai ba");
     }
 
     #[test]

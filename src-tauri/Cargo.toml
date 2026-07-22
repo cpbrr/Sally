@@ -1,6 +1,6 @@
 [package]
 name = "sally"
-version = "1.1.2"
+version = "1.1.3"
 edition = "2021"
 description = "Floating live translation and transcription for meetings"
 license = "MIT"
