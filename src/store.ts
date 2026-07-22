@@ -74,7 +74,11 @@ export const useSally = create<SallyState>((set, get) => ({
 
   setPhase: (phase) => set({ phase }),
   setConfig: (config) => {
-    const lang = (config?.ui_language === "vi" ? "vi" : "en") as UiLanguage;
+    const lang = (
+      config?.ui_language === "vi" || config?.ui_language === "ja"
+        ? config.ui_language
+        : "en"
+    ) as UiLanguage;
     set({ config, uiLanguage: lang, dict: dictionaries[lang] });
   },
   setUiLanguage: (uiLanguage) =>
