@@ -1,5 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import {
   IconClose,
@@ -9,7 +9,6 @@ import {
   IconPinOff,
   IconSpeakerOff,
   IconSpeakerOn,
-  IconVolume,
 } from "./Icons";
 import { useSally } from "../store";
 import { useShallow } from "zustand/react/shallow";
@@ -38,15 +37,39 @@ export function TitleBar() {
     );
   const [pinned, setPinned] = useState(config?.always_on_top ?? false);
   const [volume, setVolume] = useState(config?.readout_volume ?? 1);
+  // Remembers the last non-zero volume so clicking the button to unmute
+  // (after dragging the slider all the way down) restores something
+  // sensible instead of jumping back in at 0.
+  const lastVolumeRef = useRef(config?.readout_volume || 1);
+  // Mirrors config.readout_enabled synchronously during a drag, so rapid
+  // onChange ticks only call setReadout once per mute/unmute boundary
+  // crossing instead of on every pixel of movement.
+  const enabledRef = useRef(config?.readout_enabled ?? false);
 
   useEffect(() => {
     setVolume(config?.readout_volume ?? 1);
   }, [config?.readout_volume]);
 
+  useEffect(() => {
+    enabledRef.current = config?.readout_enabled ?? false;
+  }, [config?.readout_enabled]);
+
   // Instant while dragging (no .env write per tick), persisted on release.
+  // YouTube-style: dragging to 0 mutes, dragging back up unmutes — both
+  // fire only on the boundary crossing, not on every tick.
   const dragVolume = (v: number) => {
     setVolume(v);
     api.setReadoutVolume(v, false).catch(() => {});
+    if (v > 0) {
+      lastVolumeRef.current = v;
+      if (!enabledRef.current) {
+        enabledRef.current = true;
+        api.setReadout(true).then(setConfig).catch(() => {});
+      }
+    } else if (enabledRef.current) {
+      enabledRef.current = false;
+      api.setReadout(false).then(setConfig).catch(() => {});
+    }
   };
   const commitVolume = async (v: number) => {
     const updated = await api.setReadoutVolume(v, true).catch(() => null);
@@ -68,7 +91,16 @@ export function TitleBar() {
   };
 
   const toggleReadout = async () => {
-    const updated = await api.setReadout(!(config?.readout_enabled ?? false));
+    const next = !(config?.readout_enabled ?? false);
+    if (next && volume <= 0) {
+      // Unmuting from a slider-dragged-to-zero state: restore the last
+      // volume instead of turning on at silence.
+      const restored = lastVolumeRef.current || 1;
+      setVolume(restored);
+      await api.setReadoutVolume(restored, true).catch(() => {});
+    }
+    enabledRef.current = next;
+    const updated = await api.setReadout(next);
     setConfig(updated);
   };
 
@@ -89,34 +121,28 @@ export function TitleBar() {
         <span className={`status-dot ${status}`} />
         <span className="status-text">{statusLabel}</span>
       </div>
-      <button
-        className={`icon-btn ${config?.readout_enabled ? "active" : ""}`}
-        title={config?.readout_enabled ? dict.readoutOff : dict.readoutOn}
-        onClick={toggleReadout}
-      >
-        {config?.readout_enabled ? <IconSpeakerOn /> : <IconSpeakerOff />}
-      </button>
-      {config?.readout_enabled && (
-        <div className="volume-wrap">
-          <button className="icon-btn" title={dict.readoutVolume}>
-            <IconVolume />
-          </button>
-          <div className="volume-slider-track">
-            <input
-              className="volume-slider"
-              type="range"
-              min={0}
-              max={100}
-              value={Math.round(volume * 100)}
-              title={dict.readoutVolume}
-              onChange={(e) => dragVolume(Number(e.target.value) / 100)}
-              onPointerUp={() => commitVolume(volume)}
-              onKeyUp={() => commitVolume(volume)}
-            />
-            <span className="volume-value">{Math.round(volume * 100)}%</span>
-          </div>
+      <div className="volume-wrap">
+        <button
+          className={`icon-btn ${config?.readout_enabled ? "active" : ""}`}
+          title={config?.readout_enabled ? dict.readoutOff : dict.readoutOn}
+          onClick={toggleReadout}
+        >
+          {config?.readout_enabled ? <IconSpeakerOn /> : <IconSpeakerOff />}
+        </button>
+        <div className="volume-slider-track">
+          <input
+            className="volume-slider"
+            type="range"
+            min={0}
+            max={100}
+            value={Math.round((config?.readout_enabled ? volume : 0) * 100)}
+            title={dict.readoutVolume}
+            onChange={(e) => dragVolume(Number(e.target.value) / 100)}
+            onPointerUp={() => commitVolume(volume)}
+            onKeyUp={() => commitVolume(volume)}
+          />
         </div>
-      )}
+      </div>
       <button
         className={`icon-btn ${pinned ? "active" : ""}`}
         title={pinned ? dict.unpin : dict.pin}

@@ -30,7 +30,11 @@ pub struct CaptureHandle {
 }
 
 impl CaptureHandle {
-    pub fn stop(mut self) {
+    /// Stop and join every system-audio thread in place. `&mut self` (not
+    /// consuming) so a handle can be stopped and then replaced by a fresh
+    /// one from `spawn_system` — e.g. switching the captured app mid-
+    /// meeting without touching mic capture.
+    pub fn stop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
         for t in self.threads.drain(..) {
             let _ = t.join();
@@ -124,11 +128,30 @@ pub fn start_capture(
     session_start: Instant,
     tx: mpsc::Sender<RawFrame>,
 ) -> Result<(MicCapture, CaptureHandle)> {
+    let mic_capture = spawn_mic(mic_device.to_string(), session_start, tx.clone())?;
+    let capture_handle = spawn_system(
+        system_device,
+        capture_app,
+        mac_capture_method,
+        session_start,
+        tx,
+    )?;
+    Ok((mic_capture, capture_handle))
+}
+
+/// Start (or restart) system/app-audio capture alone. Used both for the
+/// initial capture in `start_capture` and to switch the captured app mid-
+/// meeting (`Control::SwitchCaptureApp`), without touching mic capture.
+pub fn spawn_system(
+    system_device: &str,
+    capture_app: &str,
+    mac_capture_method: &str,
+    session_start: Instant,
+    tx: mpsc::Sender<RawFrame>,
+) -> Result<CaptureHandle> {
     let stop = Arc::new(AtomicBool::new(false));
     let mut threads = Vec::new();
     let mut app_capture_active = false;
-
-    let mic_capture = spawn_mic(mic_device.to_string(), session_start, tx.clone())?;
 
     #[cfg(windows)]
     if !capture_app.is_empty() {
@@ -163,14 +186,11 @@ pub fn start_capture(
         app_capture_active = app_isolated;
     }
 
-    Ok((
-        mic_capture,
-        CaptureHandle {
-            stop,
-            threads,
-            app_capture_active,
-        },
-    ))
+    Ok(CaptureHandle {
+        stop,
+        threads,
+        app_capture_active,
+    })
 }
 
 fn find_by_name(mut devices: impl Iterator<Item = cpal::Device>, name: &str) -> Option<cpal::Device> {

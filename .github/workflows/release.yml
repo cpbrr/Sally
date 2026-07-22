@@ -64,20 +64,6 @@ jobs:
         with:
           workspaces: src-tauri
       - run: npm ci
-      - name: Bundle onnxruntime dylib (load-dynamic on macOS — see Cargo.toml)
-        # ort-sys's default download-then-static-link strategy broke for
-        # aarch64-apple-darwin on this runner (its downloaded artifact for
-        # this target isn't actually a static archive). macOS instead
-        # dlopen()s this bundled copy at runtime (lib.rs's ort::init_from,
-        # tauri.macos.conf.json's resource bundling) — same ONNX Runtime
-        # version ort-sys itself targets, from its official release, not
-        # ort-sys's own (differently-formatted) CDN copy.
-        run: |
-          curl -L -o onnxruntime.tgz \
-            https://github.com/microsoft/onnxruntime/releases/download/v1.24.2/onnxruntime-osx-arm64-1.24.2.tgz
-          tar -xzf onnxruntime.tgz
-          mkdir -p src-tauri/onnxruntime
-          cp -L onnxruntime-osx-arm64-1.24.2/lib/libonnxruntime.dylib src-tauri/onnxruntime/libonnxruntime.dylib
       - run: npx tauri build --target aarch64-apple-darwin --bundles app
       - name: Ad-hoc sign the app bundle
         # No Developer ID certificate (design §12.2, still pending) — an

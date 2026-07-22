@@ -18,6 +18,7 @@ export interface RedactedConfig {
   mac_capture_method: string;
   readout_enabled: boolean;
   readout_volume: number;
+  split_line_count: number;
 }
 
 export interface BootInfo {
@@ -40,6 +41,7 @@ export interface SettingsPayload {
   mac_capture_method?: string;
   readout_enabled?: boolean;
   readout_volume?: number;
+  split_line_count?: number;
 }
 
 export interface AudioDevices {
@@ -105,6 +107,8 @@ export const api = {
     invoke<RedactedConfig>("set_readout_volume", { volume, persist }),
   switchMic: (device: string) =>
     invoke<RedactedConfig>("switch_mic", { device }),
+  switchCaptureApp: (captureApp: string) =>
+    invoke<RedactedConfig>("switch_capture_app", { captureApp }),
   resumeMeeting: () => invoke<void>("resume_meeting"),
   endMeeting: () => invoke<ReviewInfo>("end_meeting"),
   getLastMeeting: () => invoke<ReviewInfo | null>("get_last_meeting"),

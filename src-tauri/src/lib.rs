@@ -5,7 +5,6 @@ pub mod error;
 pub mod gemini;
 pub mod lang;
 pub mod session;
-pub mod split;
 pub mod store;
 pub mod timeline;
 
@@ -21,27 +20,6 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::default())
         .setup(|app| {
-            // Speaker-change splitting's ONNX Runtime dependency uses
-            // load-dynamic on macOS (Cargo.toml) instead of build-time
-            // static linking, which broke for aarch64-apple-darwin on
-            // GitHub's macos-26 runner. The dylib ships as a bundled
-            // resource instead (tauri.macos.conf.json); load it explicitly
-            // before anything can call Session::builder(). A missing or
-            // failed load just disables speaker-split — same graceful
-            // fallback as when the segmentation model itself fails to
-            // download — never blocks startup.
-            #[cfg(target_os = "macos")]
-            if let Ok(resource_dir) = app.path().resource_dir() {
-                let dylib = resource_dir.join("onnxruntime").join("libonnxruntime.dylib");
-                if let Err(e) = ort::init_from(&dylib).map(|b| {
-                    b.commit();
-                }) {
-                    log::warn!(
-                        "onnxruntime dylib unavailable at {}, speaker-change splitting disabled: {e}",
-                        dylib.display()
-                    );
-                }
-            }
             // Load config through the data-dir pointer, if setup already ran.
             let state = app.state::<AppState>();
             if let Ok(dir) = app.path().app_config_dir() {
@@ -50,11 +28,17 @@ pub fn run() {
                         Ok(cfg) => {
                             // Garbage-collect the local-diarization embedding
                             // model (feature removed in v0.9.0; Gemini cleanup
-                            // handles speaker attribution now).
-                            let stale = split::models_dir(&cfg.data_dir)
-                                .join("speaker_embedding_campp.onnx");
-                            if stale.exists() {
-                                let _ = std::fs::remove_file(stale);
+                            // handles speaker attribution now) and the
+                            // speaker-change segmentation model (feature
+                            // removed later — see git history).
+                            let models_dir = cfg.data_dir.join("models");
+                            for stale in [
+                                models_dir.join("speaker_embedding_campp.onnx"),
+                                models_dir.join("segmentation_pyannote3.onnx"),
+                            ] {
+                                if stale.exists() {
+                                    let _ = std::fs::remove_file(stale);
+                                }
                             }
                             // No contention at setup time; try_lock is safe on
                             // any thread (blocking_lock panics inside tokio).
@@ -81,6 +65,7 @@ pub fn run() {
             commands::set_readout,
             commands::set_readout_volume,
             commands::switch_mic,
+            commands::switch_capture_app,
             commands::end_meeting,
             commands::get_last_meeting,
             commands::list_meetings,
