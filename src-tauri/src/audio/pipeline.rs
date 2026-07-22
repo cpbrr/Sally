@@ -4,7 +4,7 @@
 //! (the optional recorder in `recorder.rs` does that downstream).
 
 use super::{
-    downmix, f32_to_i16, AudioSource, LinearResampler, MixedChunk, RawFrame, CHUNK_SAMPLES,
+    downmix, f32_to_i16, AudioSource, CubicResampler, MixedChunk, RawFrame, CHUNK_SAMPLES,
     TARGET_SAMPLE_RATE,
 };
 use std::collections::VecDeque;
@@ -20,7 +20,7 @@ const MIC_ACTIVITY_RMS: f32 = 0.008;
 const SYSTEM_ACTIVITY_RMS: f32 = 0.008;
 
 struct SourceLane {
-    resampler: LinearResampler,
+    resampler: CubicResampler,
     rate: u32,
     buffer: VecDeque<f32>,
     dropped: bool,
@@ -29,7 +29,7 @@ struct SourceLane {
 impl SourceLane {
     fn new() -> Self {
         Self {
-            resampler: LinearResampler::new(TARGET_SAMPLE_RATE, TARGET_SAMPLE_RATE),
+            resampler: CubicResampler::new(TARGET_SAMPLE_RATE, TARGET_SAMPLE_RATE),
             rate: TARGET_SAMPLE_RATE,
             buffer: VecDeque::new(),
             dropped: false,
@@ -38,7 +38,7 @@ impl SourceLane {
 
     fn push(&mut self, frame: &RawFrame) {
         if frame.sample_rate != self.rate {
-            self.resampler = LinearResampler::new(frame.sample_rate, TARGET_SAMPLE_RATE);
+            self.resampler = CubicResampler::new(frame.sample_rate, TARGET_SAMPLE_RATE);
             self.rate = frame.sample_rate;
         }
         let mono = downmix(&frame.samples, frame.channels);

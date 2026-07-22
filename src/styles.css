@@ -183,11 +183,14 @@ select:focus, input:focus { outline: 1px solid var(--accent); }
   font-style: italic;
 }
 
-/* YouTube-style: the slider track is collapsed to nothing and only grows
-   on hover/focus of the wrapper, sliding out from behind the button. */
+/* YouTube-style: one control (button + slider). The slider track is
+   collapsed to nothing and only grows on hover/focus of the wrapper,
+   sliding out to the left of the button (row-reverse keeps the button
+   anchored on the right, DOM order stays button-then-slider). */
 .volume-wrap {
   position: relative;
   display: flex;
+  flex-direction: row-reverse;
   align-items: center;
 }
 .volume-slider-track {
@@ -208,12 +211,6 @@ select:focus, input:focus { outline: 1px solid var(--accent); }
   width: 90px;
   height: 3px;
   accent-color: var(--accent);
-}
-.volume-value {
-  font-size: 11px;
-  color: var(--text-dim);
-  min-width: 32px;
-  text-align: right;
 }
 .text-size-btn { font-weight: 700; }
 .text-size-btn-small { font-size: 10px; }

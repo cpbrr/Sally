@@ -22,8 +22,6 @@ const KEY_MIC_DEVICE: &str = "SALLY_MIC_DEVICE";
 const KEY_SYSTEM_DEVICE: &str = "SALLY_SYSTEM_DEVICE";
 const KEY_READOUT: &str = "SALLY_READOUT";
 const KEY_LIVE_API_VERSION: &str = "SALLY_LIVE_API_VERSION";
-const KEY_SPEAKER_SPLIT: &str = "SALLY_SPEAKER_SPLIT";
-const KEY_SEG_MODEL_URL: &str = "SALLY_SEGMENTATION_MODEL_URL";
 const KEY_SAVE_AUDIO: &str = "SALLY_SAVE_AUDIO";
 const KEY_SPLIT_LINE_COUNT: &str = "SALLY_SPLIT_LINE_COUNT";
 const KEY_READOUT_VOLUME: &str = "SALLY_READOUT_VOLUME";
@@ -62,19 +60,12 @@ pub struct AppConfig {
     /// Live API version (`v1alpha` or `v1beta`). Preview models usually live
     /// on v1alpha; the session flips automatically if setup is rejected.
     pub live_api_version: String,
-    /// Split "Meeting" lines when a different remote voice takes over
-    /// (segmentation model on the system lane). On by default;
-    /// SALLY_SPEAKER_SPLIT=off disables it.
-    pub speaker_split_enabled: bool,
-    /// Override URL for the segmentation model download (air-gapped setups).
-    pub segmentation_model_url: String,
     /// Save the mixed meeting audio as a local WAV next to the transcript
     /// so passages can be re-listened to during review. Local only; never
     /// uploaded. On by default; SALLY_SAVE_AUDIO=off disables it.
     pub save_audio: bool,
     /// Force a new "line" (timeline entry) every this many sentences in
-    /// the open entry, regardless of speaker — a simpler alternative to
-    /// (or complement of) `speaker_split_enabled`. 0 disables it.
+    /// the open entry, regardless of speaker. 0 disables it.
     /// SALLY_SPLIT_LINE_COUNT; defaults to 3.
     pub split_line_count: u32,
     /// Readout playback volume, 0.0–1.0.
@@ -99,8 +90,6 @@ impl AppConfig {
             mac_capture_method: "auto".into(),
             readout_enabled: false,
             live_api_version: DEFAULT_LIVE_API_VERSION.into(),
-            speaker_split_enabled: true,
-            segmentation_model_url: String::new(),
             save_audio: true,
             split_line_count: DEFAULT_SPLIT_LINE_COUNT,
             readout_volume: 1.0,
@@ -166,8 +155,6 @@ impl AppConfig {
         if !ver.is_empty() {
             cfg.live_api_version = ver;
         }
-        cfg.speaker_split_enabled = get(KEY_SPEAKER_SPLIT) != "off";
-        cfg.segmentation_model_url = get(KEY_SEG_MODEL_URL);
         cfg.save_audio = get(KEY_SAVE_AUDIO) != "off";
         if let Ok(v) = get(KEY_SPLIT_LINE_COUNT).parse::<u32>() {
             cfg.split_line_count = v;
@@ -208,11 +195,6 @@ impl AppConfig {
         );
         map.insert(KEY_LIVE_API_VERSION.into(), self.live_api_version.clone());
         map.insert(
-            KEY_SPEAKER_SPLIT.into(),
-            if self.speaker_split_enabled { "on" } else { "off" }.into(),
-        );
-        map.insert(KEY_SEG_MODEL_URL.into(), self.segmentation_model_url.clone());
-        map.insert(
             KEY_SAVE_AUDIO.into(),
             if self.save_audio { "on" } else { "off" }.into(),
         );
@@ -228,6 +210,8 @@ impl AppConfig {
             "SALLY_DIAR_THRESHOLD",
             "SALLY_EMBEDDING_MODEL_URL",
             "SALLY_READOUT_SPEED",
+            "SALLY_SPEAKER_SPLIT",
+            "SALLY_SEGMENTATION_MODEL_URL",
         ] {
             map.remove(legacy);
         }
@@ -261,6 +245,7 @@ impl AppConfig {
             mac_capture_method: self.mac_capture_method.clone(),
             readout_enabled: self.readout_enabled,
             readout_volume: self.readout_volume,
+            split_line_count: self.split_line_count,
         }
     }
 }
@@ -280,6 +265,7 @@ pub struct RedactedConfig {
     pub mac_capture_method: String,
     pub readout_enabled: bool,
     pub readout_volume: f32,
+    pub split_line_count: u32,
 }
 
 /// Remove every occurrence of the API key from a message before it can reach
@@ -396,8 +382,6 @@ mod tests {
         cfg.mac_capture_method = "screencapturekit".into();
         cfg.readout_enabled = true;
         cfg.live_api_version = "v1alpha".into();
-        cfg.speaker_split_enabled = false;
-        cfg.segmentation_model_url = "https://example.com/model.bin".into();
         cfg.save_audio = false;
         cfg.split_line_count = 7;
         cfg.readout_volume = 0.42;
@@ -418,11 +402,6 @@ mod tests {
         assert_eq!(reloaded.mac_capture_method, "screencapturekit");
         assert_eq!(reloaded.readout_enabled, true);
         assert_eq!(reloaded.live_api_version, "v1alpha");
-        assert_eq!(reloaded.speaker_split_enabled, false);
-        assert_eq!(
-            reloaded.segmentation_model_url,
-            "https://example.com/model.bin"
-        );
         assert_eq!(reloaded.save_audio, false);
         assert_eq!(reloaded.split_line_count, 7);
         assert_eq!(reloaded.readout_volume, 0.42);

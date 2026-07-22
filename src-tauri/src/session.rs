@@ -12,7 +12,6 @@ use crate::audio::{
 use crate::config::AppConfig;
 use crate::error::{Result, SallyError};
 use crate::gemini::live::{self, LiveEvent};
-use crate::split::{self, SplitDetector};
 use crate::store::{MeetingStore, RecoveryJournal};
 use crate::timeline::Assembler;
 use serde::Serialize;
@@ -40,10 +39,6 @@ const MIN_SPLIT_CHARS: usize = 12;
 /// boundary is split anyway, so one uninterrupted speaker never accumulates
 /// an unreadably long block ("split every minute").
 const MAX_TURN_DURATION_MS: u64 = 60_000;
-/// A pending speaker-change split waits for a sentence boundary, but never
-/// accumulates more than this much additional text before splitting anyway
-/// (a speaker who never punctuates must not merge two voices forever).
-const PENDING_SPLIT_MAX_EXTRA_CHARS: usize = 160;
 /// No microphone frames for this long (while not paused) means the device
 /// disconnected — prompt the user to pick a new one instead of silently
 /// translating with a permanently-padded mic lane forever.
@@ -60,6 +55,10 @@ pub enum Control {
     /// Restart mic capture on a different device (e.g. after the previous
     /// one disconnected), without touching system-audio capture.
     SwitchMic(String),
+    /// Restart system/app-audio capture with a different captured app
+    /// (empty = whole system), e.g. after the user changes it in Settings
+    /// mid-meeting, without touching mic capture.
+    SwitchCaptureApp(String),
 }
 
 /// Returned to the command layer when the meeting ends.
@@ -223,15 +222,6 @@ struct Meeting {
     /// playing back the garbled/looping audio that goes with it. Reset at
     /// every turn boundary alongside `open_lang`.
     repeat_loop_muted: bool,
-    /// A speaker-change boundary arrived but the rotation is deferred until
-    /// the open entry's text reaches a sentence end, so the previous
-    /// speaker's lagging transcription drains into their own entry.
-    rotate_pending: bool,
-    pending_since_len: usize,
-    /// Speaker-change splitting: the detector arrives asynchronously once
-    /// the model is ensured (first run downloads ~6 MB). The meeting never
-    /// waits for it; until it lands, entries just split on turns alone.
-    split_det: Option<SplitDetector>,
     conn: Option<live::LiveConnection>,
     api_version: String,
     reconnect_delay: Duration,
@@ -286,14 +276,6 @@ impl Meeting {
         }
         while let Some(chunk) = self.pipeline.next_chunk() {
             self.last_chunk_ms = chunk.t_ms;
-            // Selecting a specific app/tab as the capture source (per-app
-            // loopback on Windows, the Core Audio tap on macOS) means
-            // Sally's own readout output is structurally excluded from what
-            // gets captured — it belongs to a different process, not the
-            // selected app. Audio still flows to Gemini uninterrupted;
-            // muting it made the whole pipeline stall until playback
-            // finished.
-            let readout_playing = self.player.as_mut().map(|p| p.is_active()).unwrap_or(false);
             let record_err = self
                 .recorder
                 .as_mut()
@@ -307,16 +289,6 @@ impl Meeting {
             }
             self.assembler
                 .push_activity(chunk.mic_active, chunk.system_active, chunk.t_ms);
-            if let Some(d) = self.split_det.as_ref() {
-                // Readout playback is our own translated voice in
-                // the loopback: fed as silence so the detector
-                // never calls it a new speaker.
-                let _ = d.audio_tx.send(split::Feed {
-                    samples: chunk.system,
-                    t_ms: chunk.t_ms,
-                    suppress: readout_playing,
-                });
-            }
             if let Some(c) = self.conn.as_ref() {
                 // try_send: a stalled socket must not block audio.
                 if c.audio_tx.try_send(chunk.mixed).is_err() {
@@ -340,7 +312,6 @@ impl Meeting {
             );
             self.open_lang = None;
             self.repeat_loop_muted = false;
-            self.rotate_pending = false;
             self.last_fragment_ms = 0;
         } else if !self.paused
             && self.assembler.open_original_len() >= MIN_SPLIT_CHARS
@@ -364,7 +335,6 @@ impl Meeting {
             }
             self.open_lang = None;
             self.repeat_loop_muted = false;
-            self.rotate_pending = false;
             emit_partial(&self.app, &self.assembler);
         }
     }
@@ -391,23 +361,6 @@ impl Meeting {
             }
             Some(LiveEvent::Original(text)) => {
                 let frag_lang = crate::lang::detect(&text);
-                // Deferred speaker-change split: the previous
-                // speaker's text already ends at a sentence, so this
-                // fragment starts the new voice's entry.
-                if self.rotate_pending && self.assembler.open_ends_sentence() {
-                    if let Some(sealed) = self.assembler.rotate_turn() {
-                        emit_sealed(
-                            &self.app,
-                            sealed,
-                            &mut self.store,
-                            &self.config,
-                            &mut self.sealed_entries,
-                        );
-                    }
-                    self.open_lang = None;
-                    self.repeat_loop_muted = false;
-                    self.rotate_pending = false;
-                }
                 // Language changed mid-stream (e.g. Japanese hand-off
                 // to Vietnamese): split so each entry stays in one
                 // language. Latin-generic text detects as None and
@@ -423,7 +376,6 @@ impl Meeting {
                                 &mut self.sealed_entries,
                             );
                         }
-                        self.rotate_pending = false;
                     }
                 }
                 if frag_lang.is_some() {
@@ -433,31 +385,9 @@ impl Meeting {
                 if crate::lang::has_repeat_loop(self.assembler.open_original_text()) {
                     self.repeat_loop_muted = true;
                 }
-                // The fragment just appended may have completed the
-                // previous speaker's sentence — split now so the
-                // next fragment starts fresh. The size cap keeps an
-                // unpunctuated stream from merging voices forever.
-                if self.rotate_pending
-                    && (self.assembler.open_ends_sentence()
-                        || self.assembler.open_original_len()
-                            > self.pending_since_len + PENDING_SPLIT_MAX_EXTRA_CHARS)
-                {
-                    if let Some(sealed) = self.assembler.rotate_turn() {
-                        emit_sealed(
-                            &self.app,
-                            sealed,
-                            &mut self.store,
-                            &self.config,
-                            &mut self.sealed_entries,
-                        );
-                    }
-                    self.open_lang = None;
-                    self.repeat_loop_muted = false;
-                    self.rotate_pending = false;
-                }
-                // Speaker-agnostic alternative to speaker-change splitting:
-                // force a new line every `split_line_count` sentences, at
-                // whichever sentence boundary reaches it. 0 disables it.
+                // Force a new line every `split_line_count` sentences,
+                // regardless of speaker, at whichever sentence boundary
+                // reaches it. 0 disables it.
                 if self.config.split_line_count > 0
                     && self.assembler.open_ends_sentence()
                     && self.assembler.open_sentence_count() >= self.config.split_line_count
@@ -473,7 +403,6 @@ impl Meeting {
                     }
                     self.open_lang = None;
                     self.repeat_loop_muted = false;
-                    self.rotate_pending = false;
                 }
                 self.last_fragment_ms = self.last_chunk_ms;
                 emit_partial(&self.app, &self.assembler);
@@ -527,7 +456,6 @@ impl Meeting {
                 }
                 self.open_lang = None;
                 self.repeat_loop_muted = false;
-                self.rotate_pending = false;
                 self.last_fragment_ms = 0;
             }
             other => {
@@ -593,7 +521,7 @@ async fn run_session(
     mut frame_rx: mpsc::Receiver<RawFrame>,
     mut control_rx: mpsc::Receiver<Control>,
     done_tx: oneshot::Sender<Result<ReviewData>>,
-    capture_handle: capture::CaptureHandle,
+    mut capture_handle: capture::CaptureHandle,
     mic_capture: MicCapture,
     frame_tx: mpsc::Sender<RawFrame>,
     session_start: Instant,
@@ -620,31 +548,6 @@ async fn run_session(
         None
     };
 
-    // Speaker-change splitting: the detector arrives asynchronously once
-    // the model is ensured (first run downloads ~6 MB). The meeting never
-    // waits for it; until it lands, entries just split on turns alone.
-    let mut split_rx: Option<oneshot::Receiver<SplitDetector>> = None;
-    if config.speaker_split_enabled {
-        let (tx, rx) = oneshot::channel();
-        split_rx = Some(rx);
-        let data_dir = config.data_dir.clone();
-        let url = config.segmentation_model_url.clone();
-        tokio::spawn(async move {
-            match split::ensure_model(&data_dir, &url).await {
-                // Model load happens on the worker thread; start() blocks
-                // until it reports, so keep it off the async runtime.
-                Ok(path) => match tokio::task::spawn_blocking(move || SplitDetector::start(&path)).await {
-                    Ok(Ok(d)) => {
-                        let _ = tx.send(d);
-                    }
-                    Ok(Err(e)) => log::warn!("speaker split disabled: {e}"),
-                    Err(e) => log::warn!("speaker split disabled: {e}"),
-                },
-                Err(e) => log::warn!("speaker split disabled: {e}"),
-            }
-        });
-    }
-
     emit_status(&app, "connecting", "");
     let api_version = config.live_api_version.clone();
     let reconnect_delay = Duration::ZERO;
@@ -669,9 +572,6 @@ async fn run_session(
         recorder,
         open_lang: None,
         repeat_loop_muted: false,
-        rotate_pending: false,
-        pending_since_len: 0,
-        split_det: None,
         conn: None,
         api_version,
         reconnect_delay,
@@ -727,6 +627,36 @@ async fn run_session(
                             }
                         }
                     }
+                    Some(Control::SwitchCaptureApp(app_name)) => {
+                        capture_handle.stop();
+                        state.config.capture_app = app_name.clone();
+                        match capture::spawn_system(
+                            &state.config.system_device,
+                            &app_name,
+                            &state.config.mac_capture_method,
+                            state.session_start,
+                            state.frame_tx.clone(),
+                        ) {
+                            Ok(handle) => {
+                                if !app_name.is_empty() && !handle.app_capture_active {
+                                    let _ = state.app.emit(
+                                        "sally://warning",
+                                        format!(
+                                            "'{app_name}' has no active audio session — \
+                                             capturing the entire system instead."
+                                        ),
+                                    );
+                                }
+                                capture_handle = handle;
+                            }
+                            Err(e) => {
+                                let _ = state.app.emit(
+                                    "sally://warning",
+                                    format!("Couldn't switch capture source: {e}"),
+                                );
+                            }
+                        }
+                    }
                     Some(Control::SetReadout(enabled)) => {
                         state.readout_enabled = enabled;
                         if !enabled {
@@ -742,42 +672,6 @@ async fn run_session(
                         }
                     }
                     Some(Control::Stop) | None => break,
-                }
-            }
-
-            // The speaker-change detector finished loading.
-            det = async { split_rx.as_mut().unwrap().await }, if split_rx.is_some() => {
-                split_rx = None;
-                if let Ok(d) = det {
-                    log::info!("speaker split active");
-                    state.split_det = Some(d);
-                }
-            }
-
-            // A remote voice handed off to a different one. The rotation is
-            // NOT applied immediately: transcription lags the audio by a
-            // couple of seconds, so the previous speaker's last words are
-            // still in flight and would land in the new speaker's entry.
-            // Instead the split goes pending and fires once the open entry's
-            // text reaches a sentence boundary (or a size cap), letting the
-            // tail drain into its own entry first.
-            boundary = async { state.split_det.as_mut().unwrap().boundary_rx.recv().await },
-                if state.split_det.is_some() => {
-                match boundary {
-                    Some(_t_ms) => {
-                        if !state.paused
-                            && !state.assembler.open_mic_dominated()
-                            && state.assembler.open_original_len() >= MIN_SPLIT_CHARS
-                        {
-                            state.rotate_pending = true;
-                            state.pending_since_len = state.assembler.open_original_len();
-                        }
-                    }
-                    None => {
-                        // Worker thread ended (it never does unless the
-                        // session is tearing down): stop selecting on it.
-                        state.split_det = None;
-                    }
                 }
             }
 

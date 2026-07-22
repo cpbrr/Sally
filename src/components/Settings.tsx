@@ -30,6 +30,7 @@ type SettingsForm = {
   live_model: string;
   cleanup_model: string;
   mac_capture_method: string;
+  split_line_count: number;
 };
 
 function AdvancedSettings({
@@ -138,6 +139,23 @@ function AdvancedSettings({
           </label>
 
           <label>
+            {dict.splitLineCount}
+            <input
+              type="number"
+              min={0}
+              max={20}
+              value={form.split_line_count}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  split_line_count: Math.max(0, Number(e.target.value)),
+                })
+              }
+            />
+          </label>
+          <p className="field-hint">{dict.splitLineCountHint}</p>
+
+          <label>
             {dict.liveModel}
             <div className="row">
               <input
@@ -213,6 +231,7 @@ export function Settings() {
     live_model: config?.live_model ?? "",
     cleanup_model: config?.cleanup_model ?? "",
     mac_capture_method: config?.mac_capture_method ?? "auto",
+    split_line_count: config?.split_line_count ?? 3,
   });
   const [error, setError] = useState("");
   const [translucent, setTranslucentState] = useState(isTranslucent());
@@ -224,17 +243,21 @@ export function Settings() {
 
   useEffect(() => {
     api.listAudioDevices().then(setDevices).catch(() => {});
-    // macOS: listing apps goes through ScreenCaptureKit, which triggers
-    // (or checks) the Screen Recording permission — not needed at all
-    // when capture ends up using the Core Audio tap or the whole system.
-    // Only fetch on demand (the refresh button next to the picker) so
-    // opening Settings never touches it. Windows has no such permission
-    // cost, so keep it eager there.
-    if (!isMac()) {
-      refreshApps();
-    }
+    // The Core Audio tap enumeration (tried first on macOS, same as
+    // Windows' session walk) is permission-free, so fetching eagerly here
+    // costs nothing on either platform.
+    refreshApps();
     // Show the stored key so the box never looks empty after saving.
     api.getApiKey().then(setApiKey).catch(() => {});
+  }, []);
+
+  // Re-fetch when the window regains focus, so an app that started playing
+  // audio while the user was elsewhere (or a permission just granted in
+  // System Settings) shows up without a manual refresh click.
+  useEffect(() => {
+    const onFocus = () => refreshApps();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
   }, []);
 
   // Close on Escape.
@@ -260,6 +283,17 @@ export function Settings() {
       });
       setConfig(updated);
       setUiLanguage(form.ui_language as UiLanguage);
+      // The picked device/app is persisted above, but a running meeting
+      // keeps its own copy of config — nudge it live too instead of
+      // waiting for the next meeting to pick the change up.
+      if (phase === "live") {
+        if (form.mic_device !== config?.mic_device) {
+          await api.switchMic(form.mic_device).catch(() => {});
+        }
+        if (form.capture_app !== config?.capture_app) {
+          await api.switchCaptureApp(form.capture_app).catch(() => {});
+        }
+      }
       setShowSettings(false);
     } catch (e) {
       setError(String(e));

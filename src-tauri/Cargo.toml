@@ -1,6 +1,6 @@
 [package]
 name = "sally"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 description = "Floating live translation and transcription for meetings"
 license = "MIT"
@@ -30,23 +30,7 @@ base64 = "0.22"
 log = "0.4"
 env_logger = "0.11"
 
-# ort (ONNX Runtime bindings, speaker-change splitting's model): the default
-# download-then-static-link strategy is fine on Windows, but ort-sys's
-# download for aarch64-apple-darwin isn't actually a static archive — it
-# started failing to link on GitHub's macos-26 runner (build succeeded
-# identically on this exact runner label hours earlier in the same release
-# cycle, then failed twice in a row with "could not find native static
-# library `onnxruntime`" — ort-sys's own build script reached the link step
-# without reporting a download/extraction error, so the downloaded artifact
-# itself doesn't match what `-lstatic=onnxruntime` expects for this
-# target). macOS instead uses `load-dynamic` (dlopen at runtime) with a
-# bundled dylib — see lib.rs's `ort::init_from` call and
-# tauri.macos.conf.json's resource bundling.
-[target.'cfg(not(target_os = "macos"))'.dependencies]
-ort = "=2.0.0-rc.12"
-
 [target.'cfg(target_os = "macos")'.dependencies]
-ort = { version = "=2.0.0-rc.12", default-features = false, features = ["load-dynamic", "ndarray", "std", "tls-native", "tracing", "api-24"] }
 # Native system-audio capture (no BlackHole). Swift bridge builds with the
 # Xcode toolchain present on macOS runners; not compiled on other targets.
 screencapturekit = "8"

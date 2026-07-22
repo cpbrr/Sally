@@ -107,7 +107,7 @@ const en = {
   settingsTitle: "Settings",
   micDevice: "Microphone",
   micDeviceHint:
-    "Bluetooth headset microphones (e.g. AirPods) force the whole headset into low-quality hands-free mode while recording — meeting audio then sounds like a phone call. Prefer the built-in microphone and keep the headset for listening only.",
+    "AirPods and other Bluetooth headset mics force low-quality hands-free audio. Prefer the built-in microphone; use the headset for listening only.",
   systemDevice: "System audio device",
   systemDefault: "System default",
   macCaptureMethod: "macOS capture method",
@@ -119,9 +119,12 @@ const en = {
   captureSource: "Capture audio from",
   entireSystem: "Entire system",
   captureSourceHint:
-    "Pick the meeting app to capture only its audio. Sally's own read-aloud voice is then never captured, which removes echo. The app must be playing audio to appear in this list.",
+    "Select the meeting app to prevent echo. The app must be playing audio to appear in this list.",
   refresh: "Refresh",
   alwaysOnTopDefault: "Always on top by default",
+  splitLineCount: "Split every N sentences",
+  splitLineCountHint:
+    "New line every N sentences (split after \".\"), regardless of speaker. 0 disables it.",
   liveModel: "Live model",
   cleanupModel: "Cleanup model",
   version: "Version",
@@ -237,7 +240,7 @@ const vi: typeof en = {
   settingsTitle: "Cài đặt",
   micDevice: "Micrô",
   micDeviceHint:
-    "Micrô tai nghe Bluetooth (ví dụ AirPods) buộc cả tai nghe chuyển sang chế độ đàm thoại chất lượng thấp khi thu — âm thanh cuộc họp nghe như điện thoại. Nên dùng micrô máy tính và chỉ nghe qua tai nghe.",
+    "AirPods và micrô tai nghe Bluetooth khác buộc âm thanh chất lượng thấp. Nên dùng micrô máy tính; chỉ dùng tai nghe để nghe.",
   systemDevice: "Thiết bị âm thanh hệ thống",
   systemDefault: "Mặc định hệ thống",
   macCaptureMethod: "Phương thức thu âm macOS",
@@ -249,9 +252,12 @@ const vi: typeof en = {
   captureSource: "Thu âm thanh từ",
   entireSystem: "Toàn bộ hệ thống",
   captureSourceHint:
-    "Chọn ứng dụng họp để chỉ thu âm thanh của nó. Giọng đọc bản dịch của Sally sẽ không bị thu lại, loại bỏ tiếng vọng. Ứng dụng phải đang phát âm thanh mới xuất hiện trong danh sách.",
+    "Chọn ứng dụng họp để tránh tiếng vọng. Ứng dụng phải đang phát âm thanh mới xuất hiện trong danh sách.",
   refresh: "Làm mới",
   alwaysOnTopDefault: "Luôn trên cùng theo mặc định",
+  splitLineCount: "Ngắt dòng sau mỗi N câu",
+  splitLineCountHint:
+    "Xuống dòng mới sau mỗi N câu (ngắt sau dấu \".\"), bất kể người nói. 0 để tắt.",
   liveModel: "Mô hình trực tiếp",
   cleanupModel: "Mô hình dọn bản ghi",
   version: "Phiên bản",

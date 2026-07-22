@@ -8,13 +8,12 @@
 //! capture and re-enters the pipeline. Setup docs recommend headphones when
 //! readout is enabled.
 
-use super::LinearResampler;
+use super::CubicResampler;
 use crate::error::{Result, SallyError};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
 /// Gemini Live output audio rate.
 const SOURCE_RATE: u32 = 24_000;
@@ -22,20 +21,15 @@ const SOURCE_RATE: u32 = 24_000;
 /// live speech, and a long backlog is worse than dropping stale audio.
 const MAX_QUEUED_SECONDS: usize = 15;
 
-/// Speaker-echo grace period: capture keeps hearing the tail of played audio
-/// briefly after the queue drains.
-const ACTIVE_TAIL: Duration = Duration::from_millis(500);
-
 pub struct Player {
     queue: Arc<Mutex<VecDeque<f32>>>,
-    resampler: LinearResampler,
+    resampler: CubicResampler,
     device_rate: u32,
     stop: Arc<AtomicBool>,
     /// Playback gain (f32 bits), applied in the output callback so it can
     /// change mid-stream without touching queued samples.
     volume: Arc<AtomicU32>,
     thread: Option<std::thread::JoinHandle<()>>,
-    last_active: Instant,
 }
 
 impl Player {
@@ -82,12 +76,11 @@ impl Player {
 
         Ok(Self {
             queue,
-            resampler: LinearResampler::new(SOURCE_RATE, device_rate),
+            resampler: CubicResampler::new(SOURCE_RATE, device_rate),
             device_rate,
             stop,
             volume,
             thread: Some(thread),
-            last_active: Instant::now() - ACTIVE_TAIL,
         })
     }
 
@@ -109,19 +102,6 @@ impl Player {
             }
             q.push_back(s);
         }
-        self.last_active = Instant::now();
-    }
-
-    /// True while queued audio is playing (plus a short tail). Used by the
-    /// session to feed Gemini microphone-only audio during readout so the
-    /// spoken translation is not captured via loopback and translated again.
-    pub fn is_active(&mut self) -> bool {
-        let queued = { !self.queue.lock().unwrap().is_empty() };
-        if queued {
-            self.last_active = Instant::now();
-            return true;
-        }
-        self.last_active.elapsed() < ACTIVE_TAIL
     }
 
     /// Drop any queued audio (e.g. when readout is toggled off mid-turn).

@@ -95,6 +95,7 @@ pub struct SettingsPayload {
     pub capture_app: Option<String>,
     pub mac_capture_method: Option<String>,
     pub readout_enabled: Option<bool>,
+    pub split_line_count: Option<u32>,
 }
 
 /// Create or update configuration. Used by both first-run setup and the
@@ -155,6 +156,9 @@ pub async fn save_settings(
     }
     if let Some(v) = payload.readout_enabled {
         cfg.readout_enabled = v;
+    }
+    if let Some(v) = payload.split_line_count {
+        cfg.split_line_count = v;
     }
     cfg.save()?;
     write_data_dir_pointer(&app_config_dir(&app)?, &cfg.data_dir)?;
@@ -339,6 +343,25 @@ pub async fn switch_mic(state: State<'_, AppState>, device: String) -> Result<Re
     let guard = state.session.lock().await;
     if let Some(session) = guard.as_ref() {
         let _ = session.control_tx.send(Control::SwitchMic(device)).await;
+    }
+    Ok(redacted)
+}
+
+/// Change the captured app (empty = whole system) live, without ending the
+/// meeting — mirrors `switch_mic`.
+#[tauri::command]
+pub async fn switch_capture_app(
+    state: State<'_, AppState>,
+    capture_app: String,
+) -> Result<RedactedConfig> {
+    let redacted =
+        mutate_config(&state, true, |cfg| cfg.capture_app = capture_app.clone()).await?;
+    let guard = state.session.lock().await;
+    if let Some(session) = guard.as_ref() {
+        let _ = session
+            .control_tx
+            .send(Control::SwitchCaptureApp(capture_app))
+            .await;
     }
     Ok(redacted)
 }
