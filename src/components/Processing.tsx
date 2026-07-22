@@ -132,7 +132,7 @@ export function ProcessingScreen() {
   const [meetings, setMeetings] = useState<MeetingFile[]>([]);
   const [meetingTitle, setMeetingTitle] = useState("");
   const [includeTimestamps, setIncludeTimestamps] = useState(true);
-  const [includeOriginal, setIncludeOriginal] = useState(true);
+  const [includeOriginal, setIncludeOriginal] = useState(false);
   const [aiCleanup, setAiCleanup] = useState(true);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");

@@ -25,7 +25,13 @@ pub fn run() {
             if let Ok(dir) = app.path().app_config_dir() {
                 if let Some(data_dir) = config::read_data_dir_pointer(&dir) {
                     match config::AppConfig::load(data_dir) {
-                        Ok(cfg) => {
+                        Ok(mut cfg) => {
+                            // Readout must always start off, regardless of
+                            // whatever a previous session (or an older
+                            // build that still persisted it) left in
+                            // .env — it's a live-only toggle now, never
+                            // written back by set_readout.
+                            cfg.readout_enabled = false;
                             // Garbage-collect the local-diarization embedding
                             // model (feature removed in v0.9.0; Gemini cleanup
                             // handles speaker attribution now) and the

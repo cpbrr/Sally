@@ -88,6 +88,10 @@ export function TitleBar() {
     const next = !pinned;
     setPinned(next);
     await getCurrentWindow().setAlwaysOnTop(next);
+    // Persist so the pin survives an app restart, unlike readout (which is
+    // deliberately reset off every launch).
+    const updated = await api.saveSettings({ always_on_top: next }).catch(() => null);
+    if (updated) setConfig(updated);
   };
 
   const toggleReadout = async () => {
