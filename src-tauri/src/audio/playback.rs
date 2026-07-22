@@ -49,6 +49,18 @@ impl Player {
             .default_output_config()
             .map_err(|e| SallyError::Audio(format!("output config: {e}")))?;
         let device_rate = config.sample_rate().0;
+        // Diagnostic for readout-quality reports (esp. macOS, where the
+        // negotiated device rate is the one platform-sensitive variable in
+        // an otherwise identical pipeline, per src-tauri/src/audio/mod.rs's
+        // CubicResampler doc comment): if a user reruns from a terminal and
+        // shares this line, it settles what rate/format their OS actually
+        // handed back instead of guessing.
+        log::info!(
+            "readout output device: {} @ {device_rate} Hz, {} ch, {:?}",
+            device.name().unwrap_or_else(|_| "<unknown>".into()),
+            config.channels(),
+            config.sample_format(),
+        );
 
         let q = queue.clone();
         let stop_flag = stop.clone();
