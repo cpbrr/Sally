@@ -78,7 +78,7 @@ function RecordingPlayer({
         {chunks.length > 0 && (
           <button
             className={`btn compact ${
-              chunkLang === "translated" ? "primary" : ""
+              chunkLang === "translated" ? "primary" : "secondary"
             }`}
             title={dict.toggleChunkLang}
             onClick={onToggleChunkLang}
@@ -141,7 +141,7 @@ export function ProcessingScreen() {
   // component unmounting/remounting when switching away from a meeting
   // with a recording and back.
   const [chunkLang, setChunkLang] = useState<"original" | "translated">(
-    "original"
+    "translated"
   );
 
   // Load the meeting list; open the newest when nothing is selected yet.

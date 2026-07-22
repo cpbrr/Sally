@@ -87,12 +87,16 @@ fn cleanup_prompt(include_timestamps: bool, include_original: bool, context: &st
          content and phrasing at least as heavily as the existing label \
          when deciding who said what; don't treat it as ground truth.\n\
          - Keep the exact Markdown structure of entries: a `[mm:ss]` \
-         timestamp, the bold speaker label, the `Original:` line, then a \
-         blank line, then the translation line.\n\
+         timestamp, the bold speaker label, {}\n\
          - Mark genuinely unclear passages with [unclear].\n\
-         - Keep both the original text and its translation lines.\n\
          - {} timestamps.\n\
          Return only the cleaned Markdown, no commentary.",
+        if include_original {
+            "then the `Original:` line, a blank line, then the translation line."
+        } else {
+            "then only the translation line — drop the `Original:` line and its \
+             blank line entirely."
+        },
         if include_timestamps { "Keep" } else { "Remove" }
     );
     if !context.is_empty() {

@@ -105,11 +105,18 @@ function Panel({
   );
 }
 
+// Default split: original transcript gets 1/3 of the height, live
+// translation gets 2/3 — translation is what most users actually read live.
+// Only applies until the user drags the divider once (persisted below).
+const DEFAULT_SPLIT_RATIO = 1 / 3;
+
 export function Panels() {
   const dict = useSally((s) => s.dict);
   const [ratio, setRatio] = useState(() => {
     const saved = Number(localStorage.getItem("sally.split"));
-    return Number.isFinite(saved) && saved >= 0.15 && saved <= 0.85 ? saved : 0.5;
+    return Number.isFinite(saved) && saved >= 0.15 && saved <= 0.85
+      ? saved
+      : DEFAULT_SPLIT_RATIO;
   });
   const containerRef = useRef<HTMLDivElement>(null);
 

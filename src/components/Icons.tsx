@@ -148,6 +148,25 @@ export const IconReset = () => (
   </Base>
 );
 
+export const IconMic = () => (
+  <Base>
+    <rect x={9} y={2} width={6} height={12} rx={3} />
+    <path d="M18 10v1a6 6 0 0 1-12 0v-1" />
+    <line x1={12} y1={19} x2={12} y2={22} />
+    <line x1={8} y1={22} x2={16} y2={22} />
+  </Base>
+);
+
+export const IconMicOff = () => (
+  <Base>
+    <rect x={9} y={2} width={6} height={12} rx={3} />
+    <path d="M18 10v1a6 6 0 0 1-12 0v-1" />
+    <line x1={12} y1={19} x2={12} y2={22} />
+    <line x1={8} y1={22} x2={16} y2={22} />
+    <line x1={4} y1={4} x2={20} y2={20} />
+  </Base>
+);
+
 export const IconChevron = ({ open }: { open: boolean }) => (
   <Base style={{ transform: open ? "rotate(90deg)" : undefined, transition: "transform 0.12s" }}>
     <polyline points="9 6 15 12 9 18" />

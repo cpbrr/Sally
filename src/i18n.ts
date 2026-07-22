@@ -46,6 +46,8 @@ const en = {
   micLostHint:
     "Sally lost your microphone mid-meeting. Pick a device to keep going — the meeting keeps running in the meantime.",
   switchMic: "Switch",
+  muteMic: "Mute microphone",
+  unmuteMic: "Unmute microphone",
   // setup
   setupTitle: "Welcome to Sally",
   setupIntro: "A few steps before your first meeting.",
@@ -180,6 +182,8 @@ const vi: typeof en = {
   micLostHint:
     "Sally mất tín hiệu micrô giữa cuộc họp. Chọn một thiết bị để tiếp tục — cuộc họp vẫn đang chạy trong lúc chờ.",
   switchMic: "Chuyển",
+  muteMic: "Tắt tiếng micrô",
+  unmuteMic: "Bật tiếng micrô",
   setupTitle: "Chào mừng đến với Sally",
   setupIntro: "Vài bước trước cuộc họp đầu tiên của bạn.",
   setupLanguage: "Ngôn ngữ giao diện",
