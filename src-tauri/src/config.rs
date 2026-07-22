@@ -81,7 +81,7 @@ impl AppConfig {
             live_model: DEFAULT_LIVE_MODEL.into(),
             cleanup_model: DEFAULT_CLEANUP_MODEL.into(),
             target_language: "Vietnamese".into(),
-            ui_language: "en".into(),
+            ui_language: "vi".into(),
             // Off by default: staying pinned above everything during setup
             // proved annoying. The title-bar pin turns it on per window.
             always_on_top: false,
