@@ -84,6 +84,20 @@ pub fn run() {
             commands::clean_and_summarize,
             commands::recover_meetings,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Sally");
+        .build(tauri::generate_context!())
+        .expect("error while building Sally")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                let state = app_handle.state::<AppState>();
+                if let Ok(mut guard) = state.session.try_lock() {
+                    if let Some(mut session) = guard.take() {
+                        let _ = session.control_tx.try_send(crate::session::Control::Stop);
+                        if let Some(done_rx) = session.done_rx.take() {
+                            let _ = done_rx.blocking_recv();
+                        }
+                    }
+                };
+            }
+        });
 }
+
