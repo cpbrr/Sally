@@ -96,7 +96,7 @@ pub fn run() {
                             let _ = done_rx.blocking_recv();
                         }
                     }
-                }
+                };
             }
         });
 }
