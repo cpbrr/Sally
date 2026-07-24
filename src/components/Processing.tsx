@@ -134,6 +134,7 @@ export function ProcessingScreen() {
   const [includeTimestamps, setIncludeTimestamps] = useState(true);
   const [includeOriginal, setIncludeOriginal] = useState(false);
   const [aiCleanup, setAiCleanup] = useState(true);
+  const [aiContext, setAiContext] = useState("");
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
   const [resultPath, setResultPath] = useState<string | null>(null);
@@ -184,7 +185,11 @@ export function ProcessingScreen() {
         result = await api.exportWithoutTimestamps();
       }
       if (aiCleanup) {
-        result = await api.cleanAndSummarize(includeTimestamps, includeOriginal);
+        result = await api.cleanAndSummarize(
+          includeTimestamps,
+          includeOriginal,
+          aiContext.trim()
+        );
       }
       setResultPath(result);
     } catch (e) {
@@ -280,6 +285,19 @@ export function ProcessingScreen() {
               {dict.aiCleanup}
             </label>
             <p className="field-hint">{dict.aiCleanupHint}</p>
+
+            {aiCleanup && (
+              <label>
+                {dict.aiContextLabel}
+                <textarea
+                  value={aiContext}
+                  onChange={(e) => setAiContext(e.target.value)}
+                  placeholder={dict.aiContextPlaceholder}
+                  rows={3}
+                />
+              </label>
+            )}
+            {aiCleanup && <p className="field-hint">{dict.aiContextHint}</p>}
 
             {error && <p className="error-text">{error}</p>}
 

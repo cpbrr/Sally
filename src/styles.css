@@ -112,7 +112,8 @@ body {
 
 select,
 input[type="text"],
-input[type="password"] {
+input[type="password"],
+textarea {
   background: var(--bg-raised);
   color: var(--text);
   border: 1px solid var(--border);
@@ -121,7 +122,8 @@ input[type="password"] {
   font-size: 12px;
   font-family: var(--font);
 }
-select:focus, input:focus { outline: 1px solid var(--accent); }
+select:focus, input:focus, textarea:focus { outline: 1px solid var(--accent); }
+textarea { resize: vertical; }
 
 .lang-select { max-width: 120px; }
 

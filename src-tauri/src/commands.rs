@@ -591,7 +591,9 @@ pub async fn clean_and_summarize(
     state: State<'_, AppState>,
     include_timestamps: bool,
     include_original: bool,
+    user_context: String,
 ) -> Result<String> {
+    let user_context = user_context.trim().to_string();
     let cfg = require_config(&state).await?;
     let (raw_path, polished_path) = {
         let guard = state.last_meeting.lock().await;
@@ -627,7 +629,13 @@ pub async fn clean_and_summarize(
             .unwrap_or_default();
         cleaned_parts.push(
             client
-                .clean_section(section, include_timestamps, include_original, &context)
+                .clean_section(
+                    section,
+                    include_timestamps,
+                    include_original,
+                    &context,
+                    &user_context,
+                )
                 .await?,
         );
     }
@@ -638,6 +646,7 @@ pub async fn clean_and_summarize(
         .summarize(
             &format!("Meeting title: {title}\n\n{cleaned}"),
             &cfg.ui_language,
+            &user_context,
         )
         .await?;
     let polished = render_polished(&title, &summary, &cleaned, &cfg.ui_language);

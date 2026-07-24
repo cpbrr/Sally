@@ -82,6 +82,11 @@ const en = {
   aiCleanup: "AI clean & summarize",
   aiCleanupHint:
     "Sends the transcript text to Gemini for a polished summary file — it also works out who is speaking and labels remote lines per person.",
+  aiContextLabel: "Context for the AI (optional)",
+  aiContextHint:
+    "Sent to Gemini alongside the transcript. Use it to flag unrelated noise to strip out (e.g. a noisy microphone picking up stray chatter) or to describe what the meeting was about so the summary is more accurate.",
+  aiContextPlaceholder:
+    "E.g. \"Ignore any dog barking or phone ringing\" or \"This was a budget review for the Q3 marketing campaign.\"",
   meetingPick: "Meeting",
   advanced: "Advanced",
   runProcessing: "Process",
@@ -205,6 +210,11 @@ const vi: typeof en = {
   aiCleanup: "AI dọn & tóm tắt",
   aiCleanupHint:
     "Gửi văn bản bản ghi đến Gemini để tạo tệp tóm tắt đã chỉnh sửa — đồng thời tự nhận diện và gắn nhãn từng người nói ở xa.",
+  aiContextLabel: "Ngữ cảnh cho AI (tùy chọn)",
+  aiContextHint:
+    "Được gửi đến Gemini cùng bản ghi. Dùng để chỉ ra tạp âm không liên quan cần loại bỏ (ví dụ micrô ồn thu phải tiếng ồn xung quanh) hoặc mô tả nội dung cuộc họp để bản tóm tắt chính xác hơn.",
+  aiContextPlaceholder:
+    "Ví dụ: \"Bỏ qua tiếng chó sủa hoặc điện thoại reo\" hoặc \"Đây là buổi rà soát ngân sách cho chiến dịch marketing quý 3.\"",
   meetingPick: "Cuộc họp",
   advanced: "Nâng cao",
   runProcessing: "Xử lý",
@@ -326,6 +336,11 @@ const ja: typeof en = {
   aiCleanup: "AIで整形・要約",
   aiCleanupHint:
     "文字起こしのテキストをGeminiに送り、整形済みの要約ファイルを作成します — 話者の推定と、遠隔参加者ごとのラベル付けも行います。",
+  aiContextLabel: "AIへのコンテキスト(任意)",
+  aiContextHint:
+    "文字起こしと一緒にGeminiへ送信されます。除去したい無関係な雑音(ノイズの多いマイクが拾った周囲の物音など)を指定したり、会議の内容を説明して要約の精度を高めるのに使えます。",
+  aiContextPlaceholder:
+    "例:「犬の鳴き声や電話の着信音は無視して」「これは第3四半期マーケティングキャンペーンの予算レビューです」",
   meetingPick: "会議",
   advanced: "詳細設定",
   runProcessing: "処理を実行",
