@@ -69,7 +69,12 @@ pub fn split_sections(raw: &str, budget: usize) -> Vec<String> {
     sections
 }
 
-fn cleanup_prompt(include_timestamps: bool, include_original: bool, context: &str) -> String {
+fn cleanup_prompt(
+    include_timestamps: bool,
+    include_original: bool,
+    context: &str,
+    user_context: &str,
+) -> String {
     let mut p = format!(
         "You clean up a raw meeting transcript section. Rules:\n\
          - Preserve the meaning of every passage exactly; never invent facts.\n\
@@ -99,6 +104,16 @@ fn cleanup_prompt(include_timestamps: bool, include_original: bool, context: &st
         },
         if include_timestamps { "Keep" } else { "Remove" }
     );
+    if !user_context.is_empty() {
+        p.push_str(&format!(
+            "\n\nThe user supplied this context about the meeting. Use it to \
+             understand background and, where it identifies content as \
+             unrelated noise (e.g. stray chatter picked up by a noisy \
+             microphone), remove that content as if it were a filler word — \
+             but never let it override the meaning of what was actually \
+             said:\n{user_context}"
+        ));
+    }
     if !context.is_empty() {
         p.push_str(&format!(
             "\n\nThe transcript is processed in sections. The previous \
@@ -109,19 +124,26 @@ fn cleanup_prompt(include_timestamps: bool, include_original: bool, context: &st
     p
 }
 
-fn summary_prompt(ui_language: &str) -> String {
+fn summary_prompt(ui_language: &str, user_context: &str) -> String {
     let language_name = match ui_language {
         "vi" => "Vietnamese",
         "ja" => "Japanese",
         _ => "English",
     };
-    format!(
+    let mut p = format!(
         "You summarize a cleaned meeting transcript. Respond with JSON only. \
          Do not invent facts; include owners and deadlines only when explicitly \
          stated; mark uncertainty with [unclear]. Write every field's text \
          (summary, decisions, action items, open questions) in {language_name}, \
          regardless of what language the transcript itself is in."
-    )
+    );
+    if !user_context.is_empty() {
+        p.push_str(&format!(
+            "\n\nThe user supplied this context about the meeting — use it to \
+             summarize more accurately:\n{user_context}"
+        ));
+    }
+    p
 }
 
 pub struct CleanupClient {
@@ -192,18 +214,24 @@ impl CleanupClient {
         include_timestamps: bool,
         include_original: bool,
         context: &str,
+        user_context: &str,
     ) -> Result<String> {
         let body = json!({
-            "systemInstruction": { "parts": [{ "text": cleanup_prompt(include_timestamps, include_original, context) }] },
+            "systemInstruction": { "parts": [{ "text": cleanup_prompt(include_timestamps, include_original, context, user_context) }] },
             "contents": [{ "role": "user", "parts": [{ "text": section }] }]
         });
         let value = self.generate(body).await?;
         Self::extract_text(&value)
     }
 
-    pub async fn summarize(&self, cleaned: &str, ui_language: &str) -> Result<MeetingSummary> {
+    pub async fn summarize(
+        &self,
+        cleaned: &str,
+        ui_language: &str,
+        user_context: &str,
+    ) -> Result<MeetingSummary> {
         let body = json!({
-            "systemInstruction": { "parts": [{ "text": summary_prompt(ui_language) }] },
+            "systemInstruction": { "parts": [{ "text": summary_prompt(ui_language, user_context) }] },
             "contents": [{ "role": "user", "parts": [{ "text": cleaned }] }],
             "generationConfig": {
                 "responseMimeType": "application/json",
@@ -404,7 +432,7 @@ mod tests {
         assert!(out.contains("## 要約"));
         assert!(out.contains("_記録なし。_"));
         assert_eq!(
-            summary_prompt("ja").contains("Japanese"),
+            summary_prompt("ja", "").contains("Japanese"),
             true,
             "summary prompt must ask the model for Japanese output"
         );

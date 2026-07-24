@@ -119,8 +119,16 @@ export const api = {
   applyReview: (meetingTitle?: string) =>
     invoke<ReviewInfo>("apply_review", { meetingTitle: meetingTitle ?? null }),
   exportWithoutTimestamps: () => invoke<string>("export_without_timestamps"),
-  cleanAndSummarize: (includeTimestamps: boolean, includeOriginal: boolean) =>
-    invoke<string>("clean_and_summarize", { includeTimestamps, includeOriginal }),
+  cleanAndSummarize: (
+    includeTimestamps: boolean,
+    includeOriginal: boolean,
+    userContext: string
+  ) =>
+    invoke<string>("clean_and_summarize", {
+      includeTimestamps,
+      includeOriginal,
+      userContext,
+    }),
   recoverMeetings: () => invoke<string[]>("recover_meetings"),
 };
 
